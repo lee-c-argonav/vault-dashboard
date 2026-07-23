@@ -1,0 +1,801 @@
+/* vault-hud — instrument panel. Dark base, one orange accent, hairlines only. */
+
+:root {
+  --bg: #08090A;
+  --panel: #101113;
+  --panel-2: #16181B;
+  --rule: #1E2024;
+  --rule-hot: #2A2D33;
+  --orange: #FF5D1F;
+  --orange-dim: #8A3512;
+  --amber: #F0A202;
+  --bone: #E8E4DC;
+  --dim: #6E7175;
+  --dimmer: #42454A;
+
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --sans: -apple-system, "Helvetica Neue", "Inter", sans-serif;
+
+  --head-h: 74px;
+  --vit-h: 27px;
+  --band-h: 118px;
+  --bottom-h: 150px;
+  --foot-h: 30px;
+}
+
+*, *::before, *::after { box-sizing: border-box; border-radius: 0; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--rule);
+  color: var(--bone);
+  font: 13px/1.45 var(--sans);
+  overflow: hidden;
+  display: grid;
+  /* An explicit minmax(0, 1fr) column. Without it a single wide child (a long
+     warning, a long vault path) sizes the page column past the viewport and
+     silently amputates the right edge of every row, with no scrollbar. */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: var(--head-h) var(--vit-h) var(--band-h) 1fr var(--bottom-h) auto var(--foot-h);
+  gap: 1px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 24px registration grid. Sits ABOVE the panels — it is the glass, not the paper —
+   so it reads across the whole instrument instead of only inside the 1px seams. */
+.underlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 70;
+  opacity: .025;
+  background-image:
+    repeating-linear-gradient(to right, var(--bone) 0 1px, transparent 1px 24px),
+    repeating-linear-gradient(to bottom, var(--bone) 0 1px, transparent 1px 24px);
+}
+
+/* ── panel chrome ───────────────────────────────────────────────────────── */
+
+.panel {
+  position: relative;
+  z-index: 1;
+  background: var(--panel);
+  min-height: 0;
+  outline: 1px solid transparent;
+  outline-offset: -1px;
+  transition: outline-color 260ms linear;
+}
+
+.panel.flash { outline-color: var(--orange); transition: none; }
+
+/* 8px corner brackets, four corners, drawn as eight solid 1px rules */
+.panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+  background-repeat: no-repeat;
+  background-image:
+    linear-gradient(var(--rule-hot), var(--rule-hot)), linear-gradient(var(--rule-hot), var(--rule-hot)),
+    linear-gradient(var(--rule-hot), var(--rule-hot)), linear-gradient(var(--rule-hot), var(--rule-hot)),
+    linear-gradient(var(--rule-hot), var(--rule-hot)), linear-gradient(var(--rule-hot), var(--rule-hot)),
+    linear-gradient(var(--rule-hot), var(--rule-hot)), linear-gradient(var(--rule-hot), var(--rule-hot));
+  background-size: 8px 1px, 1px 8px, 8px 1px, 1px 8px, 8px 1px, 1px 8px, 8px 1px, 1px 8px;
+  background-position:
+    left top, left top,
+    right top, right top,
+    left bottom, left bottom,
+    right bottom, right bottom;
+}
+
+.lab {
+  font: 10px/1 var(--mono);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--bone);
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+}
+.lab::before {
+  content: "";
+  width: 3px;
+  height: 10px;
+  background: var(--orange);
+  margin-right: 7px;
+}
+
+.rule-fill { flex: 1; height: 1px; background: var(--rule); min-width: 8px; }
+
+.phead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 26px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.phead-meta {
+  font: 10px/1 var(--mono);
+  letter-spacing: .12em;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pbody { height: calc(100% - 27px); min-height: 0; }
+.scroll { overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
+
+.scroll::-webkit-scrollbar { width: 8px; }
+.scroll::-webkit-scrollbar-thumb { background: var(--rule-hot); }
+.scroll::-webkit-scrollbar-track { background: transparent; }
+
+/* ── header strip ───────────────────────────────────────────────────────── */
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+}
+
+/* registration ticks riding the header's bottom rule: short every 24px, tall every 120px */
+.head::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 9px;
+  pointer-events: none;
+  background-image:
+    repeating-linear-gradient(to right, var(--rule-hot) 0 1px, transparent 1px 120px),
+    repeating-linear-gradient(to right, var(--rule-hot) 0 1px, transparent 1px 24px);
+  background-size: 100% 9px, 100% 4px;
+  background-position: left bottom, left bottom;
+  background-repeat: no-repeat;
+}
+
+.brand { display: flex; align-items: baseline; gap: 12px; }
+
+.mark {
+  width: 12px;
+  height: 12px;
+  align-self: center;
+  background-image: repeating-linear-gradient(45deg, var(--orange) 0 2px, transparent 2px 5px);
+  border: 1px solid var(--orange);
+}
+
+/* Deliberately small: the application's own name must never outweigh the focus line. */
+.wordmark {
+  font: 13px/1 var(--mono);
+  letter-spacing: .22em;
+  color: var(--dim);
+}
+
+.brand-sub {
+  font: 10px/1 var(--mono);
+  letter-spacing: .12em;
+  color: var(--dim);
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+}
+.brand-sub i { color: var(--dimmer); font-style: normal; margin: 0 6px; }
+
+/* ── action bar ─────────────────────────────────────────────────────────── */
+
+.shortcuts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 24px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Kept off the page's own sprite flow: it is a definitions block, not content. */
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+.sc {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--rule-hot);
+  /* Bone rather than --dim: a 1px stroke in --dim on --panel is barely legible,
+     and these are controls, not metadata. Held back with opacity instead, so the
+     bar recedes until you look at it. */
+  color: var(--bone);
+  opacity: .62;
+  font: 10px/1 var(--mono);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: opacity 120ms linear, color 120ms linear, border-color 120ms linear, background 120ms linear;
+}
+.sc.is-text { width: auto; padding: 0 10px; }
+
+.sc svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+  shape-rendering: geometricPrecision;
+}
+.sc:hover { opacity: 1; border-color: var(--dim); background: var(--panel-2); }
+.sc:active { color: var(--orange); border-color: var(--orange); opacity: 1; }
+.sc.accent { color: var(--orange-dim); border-color: var(--orange-dim); }
+.sc.accent:hover { color: var(--orange); border-color: var(--orange); }
+
+/* Click feedback: a brief orange confirm, or a brief amber miss. */
+.sc.busy { color: var(--orange); border-color: var(--orange); opacity: 1; }
+.sc.failed { color: var(--amber); border-color: var(--amber); opacity: 1; }
+
+/* ── vitals strip ───────────────────────────────────────────────────────── */
+
+/* One line, four readings, and a slot that stays empty until something is
+   actually wrong. Everything here is metadata weight on purpose: the machine's
+   health must never compete with the focus line for attention. */
+.vitals {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 16px;
+  overflow: hidden;
+}
+
+.vit { display: flex; align-items: center; gap: 7px; flex: 0 0 auto; }
+
+.vit-k {
+  font: 9px/1 var(--mono);
+  letter-spacing: .16em;
+  color: var(--dim);
+}
+
+.vit-v {
+  font: 11px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--bone);
+  /* Fixed width so the row never reflows as digits change. Four characters
+     covers "100%" and "8h12". */
+  min-width: 4ch;
+}
+
+/* Hairline meter in the panel's existing vocabulary: a square well, a solid
+   fill, no radius, no gradient. */
+.vit-bar {
+  position: relative;
+  display: block;
+  width: 46px;
+  height: 5px;
+  border: 1px solid var(--rule-hot);
+}
+.vit-bar i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  background: var(--dim);
+  transition: width 400ms linear, background 400ms linear;
+}
+
+/* Three states, matching the readout cells above: normal, worth noticing,
+   worth acting on. */
+.vit.warn .vit-v, .vit.warn .vit-k { color: var(--amber); }
+.vit.warn .vit-bar i { background: var(--amber); }
+.vit.crit .vit-v, .vit.crit .vit-k { color: var(--orange); }
+.vit.crit .vit-bar i { background: var(--orange); }
+
+/* Charging mark. A filled square rather than a glyph, so it stays in the same
+   drawn vocabulary as the rest of the panel. */
+.vit-chg {
+  width: 5px;
+  height: 5px;
+  background: var(--orange);
+  margin-left: -3px;
+}
+
+.vit-flag {
+  flex: 0 0 auto;
+  font: 9px/1 var(--mono);
+  letter-spacing: .16em;
+  color: var(--orange);
+  border: 1px solid var(--orange-dim);
+  padding: 4px 7px;
+}
+
+/* The offender slot. Empty and invisible almost always; that silence is the
+   feature. */
+.vit-hot {
+  flex: 0 1 auto;
+  min-width: 0;
+  font: 10px/1 var(--mono);
+  letter-spacing: .06em;
+  color: var(--amber);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vit-hot:empty { display: none; }
+
+/* Nothing measured yet, or the stream is down: the whole strip recedes rather
+   than showing numbers it cannot stand behind. */
+.vitals.stale { opacity: .34; }
+
+.readout { display: flex; align-items: flex-end; flex: 0 0 auto; }
+
+.cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+  padding: 0 18px;
+  border-left: 1px solid var(--rule);
+}
+.cell:first-child { border-left: 0; }
+.cell:last-child { padding-right: 0; }
+
+.cell-k {
+  font: 9px/1 var(--mono);
+  letter-spacing: .16em;
+  color: var(--dim);
+}
+
+.cell-v {
+  font: 26px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.01em;
+  color: var(--bone);
+}
+.cell-v.zero { color: var(--dimmer); }
+.cell-v.hot { color: var(--orange); }
+
+/* ── answer band: focus | hero ──────────────────────────────────────────── */
+
+.band {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 1px;
+  min-height: 0;
+}
+
+.focus-body {
+  display: flex;
+  flex-direction: column;
+  padding: 9px 16px 0;
+  overflow: hidden;
+}
+
+.focus-eyebrow {
+  margin: 0;
+  font: 10px/1 var(--mono);
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--orange);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.focus-text {
+  margin: 7px 0 0;
+  font: 19px/1.25 var(--sans);
+  color: var(--bone);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.focus-text.empty {
+  font: 11px/1 var(--mono);
+  letter-spacing: .12em;
+  color: var(--dimmer);
+}
+.focus-text code { font: 15px/1 var(--mono); color: var(--dim); }
+
+.load { display: flex; align-items: center; gap: 10px; margin-top: auto; padding-bottom: 10px; }
+.load-k { font: 9px/1 var(--mono); letter-spacing: .16em; color: var(--dim); flex: 0 0 auto; }
+.load-strip { display: flex; align-items: flex-end; gap: 2px; height: 12px; overflow: hidden; }
+.load-strip i { display: block; width: 2px; height: 6px; background: var(--dimmer); flex: 0 0 auto; }
+.load-strip i.stale { height: 12px; background: var(--orange-dim); }
+.load-strip i.due { height: 12px; background: var(--orange); }
+.load-strip i.sched { height: 3px; background: var(--rule-hot); }
+
+/* The one number that says what is wrong. Orange when it is a pressure metric,
+   bone when the answer is simply "this is the backlog". */
+.hero-body { display: flex; flex-direction: column; padding: 6px 16px 10px; overflow: hidden; }
+
+.hero-num {
+  margin-top: auto;
+  font: 44px/.86 var(--mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.045em;
+  color: var(--orange);
+}
+.hero.calm .hero-num { color: var(--bone); }
+.hero.calm .lab::before { background: var(--dimmer); }
+
+.hero-sub {
+  margin-top: 8px;
+  font: 9px/1.5 var(--mono);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--dim);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ── main split ─────────────────────────────────────────────────────────── */
+
+.main, .bottom {
+  display: grid;
+  grid-template-columns: 56fr 44fr;
+  gap: 1px;
+  min-height: 0;
+}
+
+.rcol { display: grid; grid-template-rows: 1fr 196px; gap: 1px; min-height: 0; }
+
+/* ── todos ──────────────────────────────────────────────────────────────── */
+
+.ghead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  height: 26px;
+  margin-top: 20px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--rule);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  cursor: pointer;
+}
+.ghead:first-child { margin-top: 0; }
+.ghead:hover { background: var(--panel-2); }
+.ghead.static { cursor: default; }
+
+.gcaret {
+  width: 0; height: 0;
+  border-left: 4px solid var(--dim);
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+  flex: 0 0 auto;
+}
+.ghead:hover .gcaret { border-left-color: var(--orange); }
+
+.glabel {
+  font: 11px/1 var(--mono);
+  letter-spacing: .14em;
+  color: var(--bone);
+  white-space: nowrap;
+}
+.gopen, .gdone {
+  font: 10px/1 var(--mono);
+  letter-spacing: .12em;
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+.gdone {
+  color: var(--dimmer);
+  border: 1px solid var(--rule-hot);
+  padding: 2px 5px;
+  cursor: pointer;
+}
+.gdone:hover { color: var(--dim); border-color: var(--dim); }
+.gdone.on { color: var(--orange); border-color: var(--orange-dim); }
+.gopen { color: var(--bone); min-width: 18px; text-align: right; }
+
+.gempty {
+  padding: 8px 16px 8px 44px;
+  font: 10px/1 var(--mono);
+  letter-spacing: .12em;
+  color: var(--dimmer);
+}
+
+/* Rows are separated by air, not by a rule. A hairline under every row builds a
+   wall you have to read through; spacing lets the group headers do the dividing.
+   The text column is capped at a readable measure and the meta sits in a fixed
+   column after it, so the meta stays aligned down the list however wide the
+   window gets. */
+.todo {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: baseline;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+.todo:hover { background: var(--panel-2); }
+.todo.is-done { opacity: .4; }
+
+.box {
+  width: 9px; height: 9px;
+  border: 1px solid var(--dimmer);
+  justify-self: center;
+  align-self: center;
+}
+.box.on { background: var(--dimmer); }
+.box.hot { border-color: var(--orange); }
+
+.ttext {
+  font: 13px/1.5 var(--sans);
+  color: var(--bone);
+  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ttext code { font: 11px/1 var(--mono); color: var(--dim); background: var(--bg); padding: 1px 3px; }
+.ttext strong { font-weight: 600; color: var(--bone); }
+.ttext em { font-style: italic; color: var(--dim); }
+.is-done .ttext { text-decoration: line-through; text-decoration-color: var(--dimmer); }
+
+a.wl { color: var(--dim); text-decoration: none; border-bottom: 1px solid var(--rule-hot); }
+a.wl:hover { color: var(--orange); border-bottom-color: var(--orange); }
+
+.tmeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  font: 9px/1 var(--mono);
+  letter-spacing: .1em;
+  color: var(--dimmer);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.chip { border: 1px solid var(--rule-hot); padding: 2px 4px; color: var(--dim); }
+.chip.due-today, .chip.due-overdue { border-color: var(--orange); color: var(--orange); }
+.chip.age { border-color: var(--orange-dim); color: var(--orange-dim); }
+.chip.sched { border-style: dashed; }
+
+/* ── lattice ────────────────────────────────────────────────────────────── */
+
+.field { position: relative; cursor: crosshair; contain: paint; }
+
+/* The lattice repaints continuously. Promoting it to its own compositing layer
+   keeps those repaints off the surrounding text, which otherwise gets
+   re-rasterised every frame and shimmers at the glyph edges. */
+.field canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform: translateZ(0);
+  will-change: transform;
+}
+
+.field-hint {
+  position: absolute;
+  left: 16px; bottom: 12px;
+  font: 9px/1 var(--mono);
+  letter-spacing: .16em;
+  color: var(--dimmer);
+  pointer-events: none;
+}
+
+.lattice.expanded {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--bg);
+}
+
+/* ── decisions ──────────────────────────────────────────────────────────── */
+
+.dec {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 10px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--rule);
+  cursor: pointer;
+}
+.dec:hover { background: var(--panel-2); }
+
+.dec-date {
+  font: 9px/1.6 var(--mono);
+  letter-spacing: .06em;
+  color: var(--orange-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.dec-text {
+  font: 12px/1.4 var(--sans);
+  color: var(--dim);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.dec-text code { font: 10.5px/1 var(--mono); color: var(--bone); }
+.dec-text strong { color: var(--bone); font-weight: 600; }
+
+.dec-src {
+  margin-top: 4px;
+  font: 9px/1 var(--mono);
+  letter-spacing: .12em;
+  color: var(--dimmer);
+}
+
+/* ── rolled over ────────────────────────────────────────────────────────── */
+
+.rolled .pbody { display: grid; grid-template-columns: 1fr 1fr; align-content: start; }
+.rolled .ro:nth-child(2n + 1):not(:last-child) { border-right: 1px solid var(--rule); }
+
+.ro {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--rule);
+  cursor: pointer;
+  min-width: 0;
+}
+.ro:hover { background: var(--panel-2); }
+
+.ro-age {
+  font: 10px/1.4 var(--mono);
+  letter-spacing: .08em;
+  color: var(--orange-dim);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+.ro-age.hot { color: var(--orange); }
+
+.ro-text {
+  font: 12px/1.4 var(--sans);
+  color: var(--bone);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.ro-text code { font: 10.5px/1 var(--mono); color: var(--dim); }
+
+/* ── integrity ──────────────────────────────────────────────────────────── */
+
+.ig {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 16px;
+  border-bottom: 1px solid var(--rule);
+  font: 10px/1.5 var(--mono);
+  letter-spacing: .06em;
+}
+.ig[data-clickable] { cursor: pointer; }
+.ig[data-clickable]:hover { background: var(--panel-2); }
+.ig-k { color: var(--bone); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ig-n { color: var(--orange-dim); flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.ig-src { color: var(--dimmer); flex: 1 1 auto; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.ig-head {
+  padding: 7px 16px 4px;
+  font: 9px/1 var(--mono);
+  letter-spacing: .16em;
+  color: var(--dim);
+  border-bottom: 1px solid var(--rule);
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.ig-more {
+  padding: 5px 16px;
+  font: 9px/1 var(--mono);
+  letter-spacing: .12em;
+  color: var(--dimmer);
+}
+
+.empty-row {
+  grid-column: 1 / -1;
+  padding: 10px 16px;
+  font: 10px/1 var(--mono);
+  letter-spacing: .12em;
+  color: var(--dimmer);
+}
+
+/* ── warnings ───────────────────────────────────────────────────────────── */
+
+.warnstrip {
+  /* Counted from the end, not the start. These two are the last two rows of the
+     grid whatever else exists above them, and an absolute number here silently
+     bumps an auto-placed row past the footer the moment a row is inserted. */
+  grid-row: -3;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  min-height: 24px;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--panel);
+  position: relative;
+  z-index: 1;
+}
+
+/* Collapse in place rather than dropping out of the grid. `display: none` frees
+   the auto track, the footer slides up into it, and the real footer track
+   becomes a 30px band of bare hairline colour. */
+.warnstrip[hidden] {
+  min-height: 0;
+  height: 0;
+  padding: 0;
+  border: 0;
+}
+
+.wglyph {
+  font: 9px/1 var(--mono);
+  color: var(--bg);
+  background: var(--amber);
+  padding: 3px 5px;
+  letter-spacing: .1em;
+  flex: 0 0 auto;
+}
+.wtext {
+  font: 10px/1.6 var(--mono);
+  letter-spacing: .08em;
+  color: var(--amber);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── footer ─────────────────────────────────────────────────────────────── */
+
+.foot {
+  grid-row: -2;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  background: var(--panel);
+  position: relative;
+  z-index: 1;
+  font: 10px/1 var(--mono);
+  letter-spacing: .12em;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* Everything in the footer may shrink except the live indicator, which is the
+   one element that must survive a narrow window. */
+.foot-stats { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; overflow: hidden; }
+.fstat { display: flex; align-items: baseline; gap: 6px; padding: 0 12px; border-left: 1px solid var(--rule); }
+.fstat:first-child { border-left: 0; padding-left: 0; }
+.fstat b { font-weight: 400; color: var(--bone); }
+.fstat b.zero { color: var(--dimmer); }
+.fstat span { color: var(--dim); }
+.fstat i { color: var(--dimmer); font-style: normal; }
+
+.foot-path { color: var(--dimmer); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.foot-sync { color: var(--dimmer); white-space: nowrap; flex: 0 0 auto; }
+
+.link-state { display: flex; align-items: center; gap: 7px; color: var(--dimmer); white-space: nowrap; flex: 0 0 auto; }
+.link-state .lamp { width: 6px; height: 6px; background: var(--dimmer); }
+.link-state.live { color: var(--orange); }
+.link-state.live .lamp { background: var(--orange); animation: breathe 2s ease-in-out infinite; }
+
+@keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .link-state.live .lamp { animation: none; }
+  .panel { transition: none; }
+}

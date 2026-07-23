@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#08090A">
+<title>VAULT-HUD</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="./favicon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="stylesheet" href="./hud.css">
+</head>
+<body>
+
+<!-- Icon sprite. Drawn rather than fetched: no external host, works offline, and
+     built from the same primitives as the rest of the panel (hairline strokes,
+     square caps, circles/squares/triangles, zero curves except true circles). -->
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <defs>
+    <!-- Every horizontal and vertical edge sits on a .5 coordinate so a 1px
+         stroke lands on a pixel centre and stays crisp at 16px. -->
+    <symbol id="ic-git" viewBox="0 0 16 16">
+      <circle cx="4.5" cy="4" r="2"/>
+      <circle cx="4.5" cy="12" r="2"/>
+      <circle cx="11.5" cy="8" r="2"/>
+      <path d="M4.5 6v4"/>
+      <path d="M6.5 8.5h3"/>
+    </symbol>
+    <symbol id="ic-window" viewBox="0 0 16 16">
+      <rect x="2.5" y="3.5" width="11" height="9"/>
+      <path d="M2.5 6.5h11"/>
+    </symbol>
+    <symbol id="ic-gem" viewBox="0 0 16 16">
+      <path d="M8 2.5L13.5 8 8 13.5 2.5 8z"/>
+      <path d="M8 2.5v11"/>
+    </symbol>
+    <symbol id="ic-terminal" viewBox="0 0 16 16">
+      <rect x="2.5" y="3.5" width="11" height="9"/>
+      <path d="M5 6.5l2 2-2 2"/>
+      <path d="M8.5 10.5h3"/>
+    </symbol>
+    <symbol id="ic-code" viewBox="0 0 16 16">
+      <path d="M6 4.5L2.5 8 6 11.5"/>
+      <path d="M10 4.5L13.5 8 10 11.5"/>
+    </symbol>
+    <symbol id="ic-bolt" viewBox="0 0 16 16">
+      <path d="M9.5 2.5L3.5 8.5h3.5l-.5 5 6-6H9z"/>
+    </symbol>
+    <symbol id="ic-triangle" viewBox="0 0 16 16">
+      <path d="M8 3L13.5 12.5h-11z"/>
+    </symbol>
+    <symbol id="ic-vault" viewBox="0 0 16 16">
+      <rect x="2.5" y="2.5" width="11" height="11"/>
+      <circle cx="8" cy="8" r="2.5"/>
+      <path d="M8 2.5v3"/>
+      <path d="M8 10.5v3"/>
+    </symbol>
+  </defs>
+</svg>
+
+<header class="head panel" id="p-head">
+  <div class="brand">
+    <span class="mark" aria-hidden="true"></span>
+    <span class="wordmark">VAULT-HUD</span>
+    <span class="brand-sub"><span id="h-vault">—</span><i>·</i><span id="h-date">—</span><i>·</i><span id="h-day">—</span></span>
+  </div>
+
+  <nav class="shortcuts" id="shortcuts" aria-label="Shortcuts"></nav>
+
+  <div class="readout" id="h-readout">
+    <div class="cell"><span class="cell-k">OPEN</span><span class="cell-v" id="s-open">--</span></div>
+    <div class="cell"><span class="cell-k">STALE</span><span class="cell-v" id="s-stale">--</span></div>
+    <div class="cell"><span class="cell-k">DUE</span><span class="cell-v" id="s-due">--</span></div>
+    <div class="cell"><span class="cell-k">OVER</span><span class="cell-v" id="s-over">--</span></div>
+    <div class="cell"><span class="cell-k">DONE</span><span class="cell-v" id="s-done">--</span></div>
+  </div>
+</header>
+
+<!-- Machine vitals. Its own SSE stream, its own cadence, and it renders nothing
+     it cannot measure: a cell with no reading hides rather than showing a zero. -->
+<section class="vitals panel" id="p-vitals">
+  <div class="vit" id="v-cpu" hidden>
+    <span class="vit-k">CPU</span>
+    <span class="vit-v" id="v-cpu-n">--</span>
+    <span class="vit-bar"><i id="v-cpu-b"></i></span>
+  </div>
+  <div class="vit" id="v-gpu" hidden>
+    <span class="vit-k">GPU</span>
+    <span class="vit-v" id="v-gpu-n">--</span>
+    <span class="vit-bar"><i id="v-gpu-b"></i></span>
+  </div>
+  <div class="vit" id="v-mem" hidden>
+    <span class="vit-k">MEM</span>
+    <span class="vit-v" id="v-mem-n">--</span>
+    <span class="vit-bar"><i id="v-mem-b"></i></span>
+  </div>
+  <div class="vit" id="v-bat" hidden>
+    <span class="vit-k">BAT</span>
+    <span class="vit-v" id="v-bat-n">--</span>
+    <span class="vit-bar"><i id="v-bat-b"></i></span>
+  </div>
+
+  <span class="rule-fill"></span>
+
+  <span class="vit-flag" id="v-flag" hidden></span>
+  <span class="vit-hot" id="v-hot"></span>
+</section>
+
+<div class="band">
+  <section class="panel focus" id="p-focus">
+    <div class="phead">
+      <span class="lab">FOCUS</span>
+      <span class="rule-fill"></span>
+      <span class="phead-meta" id="focus-src"></span>
+    </div>
+    <div class="pbody focus-body">
+      <p class="focus-eyebrow" id="focus-eyebrow"></p>
+      <p class="focus-text" id="focus-text">—</p>
+      <div class="load">
+        <span class="load-k">LOAD</span>
+        <div class="load-strip" id="load-strip"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel hero" id="p-hero">
+    <div class="phead">
+      <span class="lab" id="hero-label">—</span>
+      <span class="rule-fill"></span>
+    </div>
+    <div class="pbody hero-body">
+      <span class="hero-num" id="hero-num">--</span>
+      <span class="hero-sub" id="hero-sub"></span>
+    </div>
+  </section>
+</div>
+
+<main class="main">
+
+  <section class="panel col-todos" id="p-todos">
+    <div class="phead">
+      <span class="lab">TODOS</span>
+      <span class="rule-fill"></span>
+      <span class="phead-meta" id="todos-meta"></span>
+    </div>
+    <div class="pbody scroll" id="todos-body"></div>
+  </section>
+
+  <div class="rcol">
+    <section class="panel lattice" id="p-lattice">
+      <div class="phead">
+        <span class="lab">LATTICE</span>
+        <span class="rule-fill"></span>
+        <span class="phead-meta" id="lattice-meta"></span>
+      </div>
+      <div class="pbody field" id="lattice-field">
+        <canvas id="lattice-canvas"></canvas>
+        <span class="field-hint" id="lattice-hint">CLICK FIELD TO EXPAND</span>
+      </div>
+    </section>
+
+    <section class="panel decisions" id="p-decisions">
+      <div class="phead">
+        <span class="lab">DECISIONS</span>
+        <span class="rule-fill"></span>
+        <span class="phead-meta" id="decisions-meta"></span>
+      </div>
+      <div class="pbody scroll" id="decisions-body"></div>
+    </section>
+  </div>
+
+</main>
+
+<div class="bottom">
+  <section class="panel rolled" id="p-rolled">
+    <div class="phead">
+      <span class="lab">ROLLED OVER</span>
+      <span class="rule-fill"></span>
+      <span class="phead-meta" id="rolled-meta"></span>
+    </div>
+    <div class="pbody scroll" id="rolled-body"></div>
+  </section>
+
+  <section class="panel integrity" id="p-integrity">
+    <div class="phead">
+      <span class="lab">INTEGRITY</span>
+      <span class="rule-fill"></span>
+      <span class="phead-meta" id="integrity-meta"></span>
+    </div>
+    <div class="pbody scroll" id="integrity-body"></div>
+  </section>
+</div>
+
+<div class="warnstrip" id="warnstrip" hidden></div>
+
+<footer class="foot" id="p-foot">
+  <div class="foot-stats" id="foot-stats"></div>
+  <span class="rule-fill"></span>
+  <span class="foot-path" id="foot-path"></span>
+  <span class="foot-sync" id="foot-sync"></span>
+  <span class="link-state" id="link-state"><span class="lamp"></span><span id="link-text">BOOT</span></span>
+</footer>
+
+<div class="underlay" aria-hidden="true"></div>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>

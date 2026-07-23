@@ -1,0 +1,83 @@
+{
+  "_comment": "Shortcut buttons for the HUD action bar. The browser only ever sends an id; the server runs the fixed action here. type=browser focuses an existing Chrome tab whose URL starts with `match` (else opens `url`); type=open hands `url` to the default handler (used for obsidian://); type=exec runs `run` as argv with no shell. {today} in a url expands to the local date. Machine- and account-specific values are written as ${VAR} and filled from .env at boot (see .env.example); an unset var expands to empty. icon picks a glyph from the sprite in public/index.html (git, window, gem, terminal, code, bolt, triangle, vault); an unknown name falls back to the two-letter label. Edit this file and restart the server to change the bar. match is a URL prefix or a list of prefixes tried in order: the button focuses the first already-open tab matching one, and only opens url when none matches. A list matters because services redirect after load, so an exact-URL match can miss the tab it just opened.",
+  "shortcuts": [
+    {
+      "id": "github",
+      "label": "GH",
+      "title": "GitHub",
+      "type": "browser",
+      "url": "${GITHUB_URL}",
+      "match": [
+        "${GITHUB_URL}"
+      ],
+      "icon": "git"
+    },
+    {
+      "id": "supabase",
+      "label": "SB",
+      "title": "Supabase project dashboard",
+      "type": "browser",
+      "url": "${SUPABASE_DASHBOARD_URL}",
+      "match": [
+        "${SUPABASE_DASHBOARD_URL}",
+        "https://supabase.com/dashboard"
+      ],
+      "icon": "bolt"
+    },
+    {
+      "id": "vercel",
+      "label": "VC",
+      "title": "Vercel",
+      "type": "browser",
+      "url": "${VERCEL_URL}",
+      "match": [
+        "${VERCEL_URL}",
+        "https://vercel.com/"
+      ],
+      "icon": "triangle"
+    },
+    {
+      "id": "dev",
+      "label": "DEV",
+      "title": "dev server",
+      "type": "browser",
+      "url": "${DEV_URL}",
+      "match": [
+        "${DEV_URL}"
+      ],
+      "icon": "window"
+    },
+    {
+      "id": "daily",
+      "label": "OB",
+      "title": "today's daily note in Obsidian",
+      "type": "open",
+      "url": "obsidian://open?vault=${OBSIDIAN_VAULT}&file=40-Daily%2F{today}",
+      "icon": "gem"
+    },
+    {
+      "id": "terminal",
+      "label": "TM",
+      "title": "new Terminal window in the project dir",
+      "type": "exec",
+      "run": [
+        "open",
+        "-a",
+        "Terminal",
+        "${PROJECT_DIR}"
+      ],
+      "icon": "terminal"
+    },
+    {
+      "id": "editor",
+      "label": "ED",
+      "title": "open the project in VS Code",
+      "type": "exec",
+      "run": [
+        "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+        "${PROJECT_DIR}"
+      ],
+      "icon": "code"
+    }
+  ]
+}
