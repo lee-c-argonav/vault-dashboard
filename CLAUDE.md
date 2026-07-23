@@ -10,6 +10,36 @@ publication.
 **Never commit anything personal, confidential, or firm-identifying.** This is the
 single hard rule of this repo and it overrides convenience.
 
+## MANDATORY PRE-PUSH CHECK
+
+**Before every `git push` to this repo, you MUST run the confidentiality check and
+confirm it passes. Do not push if it fails or cannot run.**
+
+```sh
+bash scripts/check-no-secrets.sh && git push
+```
+
+The check scans the committed tree (`HEAD` — exactly what a push sends) for secrets,
+real absolute home paths, firm/account identifiers, and stray fixtures, and exits
+non-zero on any hit. A clean exit (`✓`) is the only condition under which a push is
+allowed. If it fails:
+
+1. **Do not push.** Fix each finding — move machine/account values into the
+   gitignored `.env` and reference them as `${VAR}`, or replace with a placeholder.
+2. If the confidential data is already in a commit, **rewrite history** (or squash to
+   a clean commit) before pushing — removing it in a new commit is not enough
+   (see [If confidential data is ever committed](#if-confidential-data-is-ever-committed)).
+3. Re-run the check until it passes, then push.
+
+To make the gate automatic, install it as a git hook (runs on every push):
+
+```sh
+ln -sf ../../scripts/check-no-secrets.sh .git/hooks/pre-push
+```
+
+This applies to any agent or human pushing to this repo. Treat a skipped or failing
+check as a hard stop, never a warning to push past.
+
 ### Specifically, never commit:
 
 - **Real vault content.** No parsed State, no fixtures, no exported todos,
@@ -34,13 +64,11 @@ single hard rule of this repo and it overrides convenience.
   `.env.example` is the committed template and must contain only placeholders.
 - `tools.json` references those values as `${VAR}`; `server.js` loads `.env` at
   boot and `shortcuts.js` substitutes the vars.
-- Before committing, scan the staged diff for leaks, e.g.:
-
-  ```sh
-  git grep --cached -niE '/Users/|<your-username>|<your-org>|<real-project-ref>'
-  ```
-
-  Replace any hit with an env var or a placeholder before you commit.
+- `scripts/check-no-secrets.sh` is the automated gate that enforces all of the
+  above. It is mandatory before every push (see
+  [Mandatory pre-push check](#mandatory-pre-push-check)). When you add a new class of
+  identifier that should never ship, add its pattern to that script so the gate keeps
+  up.
 
 ### If confidential data is ever committed
 
