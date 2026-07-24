@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # check-no-secrets.sh — mandatory pre-push confidentiality gate for this PUBLIC repo.
 #
-# Scans the committed tree (HEAD = exactly what a push sends) and exits non-zero if
-# it finds anything confidential. Two layers:
+# Scans a committed tree (defaults to HEAD; a pre-push hook passes each pushed ref's
+# sha) and exits non-zero if it finds anything confidential. Two layers:
 #
 #   1. DETERMINISTIC — structural secret/path patterns (hard-coded below, none of
 #      which are themselves sensitive) PLUS any regexes in the gitignored
@@ -18,13 +18,20 @@
 #
 # Run before EVERY push:
 #     bash scripts/check-no-secrets.sh && git push
-# or install as a real hook so it runs automatically:
-#     ln -sf ../../scripts/check-no-secrets.sh .git/hooks/pre-push
+# or let the installed hook run it automatically against EVERY ref you push
+# (scripts/pre-push-hook.sh, symlinked to .git/hooks/pre-push — see that file).
 #
 # Exit 0 = clean, safe to push. Non-zero = something confidential is committed.
 
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
+
+# Commit-ish to scan. Defaults to HEAD for standalone use; the pre-push hook passes
+# each pushed ref's sha so `git push --all`/`--mirror` cannot slip a confidential
+# branch (e.g. backup/pre-purge) past a gate that only ever looked at HEAD.
+REF="${1:-HEAD}"
+# Files committed in $REF (the tree a push of $REF actually sends).
+tracked() { git ls-tree -r --name-only "$REF"; }
 
 fail=0
 report() { printf '  \033[31m✗ %s\033[0m\n' "$1"; fail=1; }
@@ -39,22 +46,22 @@ ALLOW='/Users/YOU|/Users/<|/ABSOLUTE/PATH|OWNER/vault-dashboard|YOUR-VAULT|proje
 LLM_MAX_CHARS=500000
 
 # 1. .env (or any real env file) must never be tracked. Only .env.example is allowed.
-if git ls-files | grep -E '^\.env(\.|$)' | grep -qv '^\.env\.example$'; then
+if tracked | grep -E '^\.env(\.|$)' | grep -qv '^\.env\.example$'; then
   report "a .env file is tracked — it must be gitignored"
-  git ls-files | grep -E '^\.env(\.|$)' | grep -v '^\.env\.example$' | sed 's/^/      /'
+  tracked | grep -E '^\.env(\.|$)' | grep -v '^\.env\.example$' | sed 's/^/      /'
 fi
 
 # 2. No real vault fixture may come back.
-if git ls-files | grep -qE '(^|/)fixture.*\.json$'; then
+if tracked | grep -qE '(^|/)fixture.*\.json$'; then
   report "a fixture JSON is tracked — reintroduces real vault data; a demo fixture must be synthetic"
-  git ls-files | grep -E '(^|/)fixture.*\.json$' | sed 's/^/      /'
+  tracked | grep -E '(^|/)fixture.*\.json$' | sed 's/^/      /'
 fi
 
 # git grep HEAD only sees committed content, which is exactly what a push sends.
 # .env.example and this script are excluded; allowed placeholders are filtered after.
 scan() { # $1 = human label, $2 = extended-regex
   local hits
-  hits=$(git grep -nIiE "$2" HEAD -- . ':!.env.example' ":!$SELF" 2>/dev/null | grep -vE "$ALLOW")
+  hits=$(git grep -nIiE "$2" "$REF" -- . ':!.env.example' ":!$SELF" 2>/dev/null | grep -vE "$ALLOW")
   if [ -n "$hits" ]; then
     report "$1"
     printf '%s\n' "$hits" | sed 's/^/      /'
@@ -100,14 +107,14 @@ else
   printf '  … running LLM confidentiality review (claude)\n'
   # Committed text only (-I skips binaries); the gate script excludes itself. Bounded
   # so a huge tree cannot blow up the call; note the bound if it is hit.
-  tree_text=$(git grep -I -n -e '.' HEAD -- . ":!$SELF" 2>/dev/null)
+  tree_text=$(git grep -I -n -e '.' "$REF" -- . ":!$SELF" 2>/dev/null)
   if [ "$(printf '%s' "$tree_text" | wc -c)" -gt "$LLM_MAX_CHARS" ]; then
     note "committed text exceeds ${LLM_MAX_CHARS} chars; LLM review is PARTIAL — split into chunks."
     tree_text=$(printf '%s' "$tree_text" | head -c "$LLM_MAX_CHARS")
   fi
   read -r -d '' PROMPT <<'PROMPT' || true
 You are a confidentiality reviewer for a PUBLIC open-source repository. The repository
-text about to be pushed is provided on standard input (format HEAD:path:lineno:content).
+text about to be pushed is provided on standard input (format <ref>:path:lineno:content).
 Flag ANY content that must not be public:
 - real company / firm names, product names, or project codenames
 - person names (real individuals)
