@@ -6,7 +6,8 @@ A read-only instrument panel for an Obsidian vault (`$VAULT_HUD_VAULT`).
 One always-open app window, next to the Claude Code terminal, that answers two
 questions at a glance:
 
-1. **What is on me right now** — today's focus, open todos grouped by project,
+1. **What is on me right now** — today's focus, open todos by time horizon
+   (overdue, due today, upcoming) with the undated backlog grouped by project,
    what rolled over and is going stale, what is due.
 2. **Is the vault healthy** — unprocessed inbox, orphan notes, stale notes,
    broken wikilinks.
