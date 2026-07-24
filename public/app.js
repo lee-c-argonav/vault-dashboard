@@ -1067,6 +1067,24 @@ function renderVitals(m) {
   $('v-hot').textContent = hot
     ? `▸ ${hot.name}  ${hot.kind === 'cpu' ? `${hot.cpuPct}%` : gib(hot.rssBytes)}`
     : '';
+
+  // GPU offender. The server always reports the top GPU process when one clears
+  // its floor, but naming it whenever the GPU is merely awake (WindowServer sits
+  // there forever) would be the always-lit slot the CPU offender deliberately
+  // avoids. So it surfaces only once the GPU cell is itself high — the same line
+  // at which that cell turns amber — and answers the question that reading raises:
+  // which app. The dim GPU key keeps it distinct from the CPU/mem offender, which
+  // can name the very same app for a different reason.
+  const gpuHotSlot = $('v-gpu-hot');
+  const gh = m.gpuHot;
+  if (gh && m.gpu != null && m.gpu >= VIT_WARN) {
+    gpuHotSlot.replaceChildren(
+      el('span', 'vit-hot-k', 'GPU'),
+      document.createTextNode(`▸ ${gh.name}  ${gh.gpuPct}%`)
+    );
+  } else {
+    gpuHotSlot.replaceChildren();
+  }
 }
 
 let vitStream = null;

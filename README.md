@@ -23,7 +23,9 @@ step. The whole thing is a static `public/` directory and a small HTTP + SSE ser
   due today, overdue, done today.
 - **Vitals strip** — CPU, GPU, memory and battery in a thin row, with a slot that
   names a process only when one is genuinely eating the machine (>80% of a core or
-  >4 GB RSS). macOS only; cells hide themselves when their data source is absent.
+  >4 GB RSS), plus a second slot that names the app driving the GPU whenever the
+  GPU reading itself is high. macOS only; cells hide themselves when their data
+  source is absent.
 - **Focus** — today's lead line, lifted from the top of the daily note.
 - **Todos** — every open `- [ ]` grouped by project, with due/stale badges.
 - **Rolled over** — open todos sitting in daily notes dated before today.
@@ -195,7 +197,7 @@ else is staggered by how fast it actually moves:
 | Cadence | Sampled | Cost |
 |---|---|---|
 | every tick (10s) | CPU via `os.cpus()`, GPU via `ioreg`, memory via `vm_stat` | ~28 ms |
-| every 3rd tick (30s) | process table via `ps` | ~30 ms |
+| every 3rd tick (30s) | process table via `ps`, per-app GPU via `ioreg` | ~40 ms |
 | every 12th tick (120s) | battery via `ioreg`, throttling via `pmset -g therm` | ~16 ms |
 
 That averages ~4 ms of CPU per second (~0.02% of an 18-core machine). Sampling runs
@@ -211,6 +213,17 @@ percent of the whole machine (0–100 across all cores); the hot slot is percent
 **one** core (the `ps`/`top` convention, so it can exceed 100). GPU utilisation reads
 an undocumented `Device Utilization %` key; if a macOS update removes it, the cell
 hides itself rather than showing a confident zero.
+
+**Per-app GPU** answers the question a high GPU number raises — *which app?* — and
+does it unprivileged, no `powermetrics` and no root. Every process with a live Metal
+context owns `AGXDeviceUserClient` nodes in the IO registry carrying a cumulative
+`accumulatedGPUTime` counter tagged with the owning pid; differencing it per process
+over the interval (exactly how CPU ranking differences `ps` TIME) names the driver,
+and the slot appears only while the GPU cell is already high. It advances on
+command-buffer completion, so it tracks streaming GPU work (video, WebGL,
+compositing) accurately and only lags a single kernel that pins the GPU for seconds.
+Like every vital it is nullable: no reliable reading, no slot, never a confident
+wrong name.
 
 ## Failure behaviour
 

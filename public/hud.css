@@ -328,6 +328,14 @@ body {
 }
 .vit-hot:empty { display: none; }
 
+/* The GPU offender's key. Same dim mono as a vital-cell label, so the slot reads
+   as "GPU, driven by X" and never blurs into the CPU/mem offender beside it. */
+.vit-hot-k {
+  color: var(--dim);
+  letter-spacing: .16em;
+  margin-right: 6px;
+}
+
 /* Nothing measured yet, or the stream is down: the whole strip recedes rather
    than showing numbers it cannot stand behind. */
 .vitals.stale { opacity: .34; }

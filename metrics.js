@@ -23,6 +23,17 @@
 // honest substitutes are used instead: `pmset -g therm` reports the OS actually
 // clamping clocks, and battery temperature comes from the battery's own sensor.
 // Per-process ranking is real interval CPU time, labelled CPU, never "energy".
+//
+// PER-PROCESS GPU is the same trap and is NOT taken the root way. The clean
+// per-process GPU source, `powermetrics --samplers gpu_power`, is root-only, so
+// it is refused for exactly the reasons above. What is used instead is
+// unprivileged and real: every process holding a live Metal context owns
+// `AGXDeviceUserClient` nodes in the IO registry, each tagged with the creating
+// pid and carrying a cumulative `accumulatedGPUTime` counter. Differencing that
+// per pid over an interval — the same move `sampleProcesses` makes on CPU time —
+// names the process actually driving the GPU. It is a "who", reported only to
+// explain a GPU reading that is already high; see `sampleGpuProcs` for what the
+// counter does and does not measure.
 
 import { execFile } from 'node:child_process';
 import os from 'node:os';
@@ -110,6 +121,91 @@ async function sampleGpu() {
     if (best !== null) return clampPct(best);
   }
   return null;
+}
+
+// ── GPU per-process attribution ────────────────────────────────────────────────
+
+// `sampleGpu` says the GPU is busy; it never says who. Each process with a live
+// Metal/GPU context owns one or more `AGXDeviceUserClient` nodes, and every node
+// carries the pid that created it (`IOUserClientCreator`) and an `AppUsage` array
+// whose `accumulatedGPUTime` is a cumulative per-process nanosecond counter.
+// Differencing it over an interval — exactly what `sampleProcesses` does to `ps`
+// TIME for CPU — gives GPU time consumed per process, and the busiest one is the
+// process driving the reading. All of it is one unprivileged `ioreg`: no
+// `powermetrics`, no root. It is the only unprivileged per-process GPU signal
+// macOS exposes, and by all appearances the one Activity Monitor's own
+// per-process GPU column reads; the root alternative
+// (`powermetrics --show-process-gpu`) is itself unreliable on Apple Silicon.
+//
+// What the counter is, honestly, because it is not a documented interface:
+//   - It advances when a command buffer COMPLETES, so a process that pins the GPU
+//     with a single multi-second submission is under-counted until that finishes.
+//     Ordinary GPU load — video, WebGL, window compositing, a stream of Metal
+//     work — completes continuously and attributes correctly; one monopolising
+//     kernel is the only shape it lags, and that is not what "high GPU with no
+//     explanation" looks like.
+//   - It is a process's share of wall time on the GPU, not a slice carved out of
+//     `Device Utilization %`, so the two do not have to sum. This answers "who";
+//     the GPU cell answers "how much". The client shows this slot only while the
+//     GPU cell is already high, so normal compositing never lights it.
+// If `AGXDeviceUserClient` or `AppUsage` ever disappears, this returns null and
+// the client shows no offender rather than a confident wrong one.
+const GPU_CREATOR = /"IOUserClientCreator"\s*=\s*"pid (\d+), ([^"]*)"/;
+const GPU_ACCUM = /"accumulatedGPUTime"\s*=\s*(\d+)/g;
+
+// Below this share of the interval a process is not driving the GPU, it is just
+// the busiest of a quiet field; naming it would be noise. The client gates on the
+// live GPU % on top of this, so the floor only has to reject the genuinely idle.
+const GPU_HOT_FLOOR_PCT = 5;
+
+let prevGpuProcs = null; // { table: Map<pid, cumulative GPU ns>, at: bigint }
+
+/**
+ * Name the process that consumed the most GPU time since the previous GPU-process
+ * sample, or null if none cleared the floor. Nullable and cheap like every other
+ * sampler; a missing or changed IO registry simply yields null.
+ */
+async function sampleGpuProcs() {
+  const out = await run('ioreg', ['-r', '-c', 'AGXDeviceUserClient', '-w', '0', '-l']);
+  if (!out) return null;
+
+  const now = process.hrtime.bigint();
+  const table = new Map(); // pid → summed GPU ns
+  const names = new Map(); // pid → creator name
+
+  // A pid can own several client nodes and a node several command queues, so
+  // every accumulatedGPUTime in a node's block sums into that node's pid.
+  for (const block of out.split('+-o AGXDeviceUserClient').slice(1)) {
+    const cre = block.match(GPU_CREATOR);
+    if (!cre) continue;
+    const pid = Number(cre[1]);
+    let ns = 0;
+    for (const m of block.matchAll(GPU_ACCUM)) ns += Number(m[1]);
+    table.set(pid, (table.get(pid) ?? 0) + ns);
+    if (!names.has(pid)) names.set(pid, cre[2].trim());
+  }
+
+  const prev = prevGpuProcs;
+  prevGpuProcs = { table, at: now };
+  if (!prev) return null; // first pass only establishes the baseline
+
+  const elapsedNs = Number(now - prev.at);
+  if (elapsedNs <= 0) return null;
+
+  let top = null;
+  for (const [pid, ns] of table) {
+    const before = prev.table.get(pid);
+    // A pid absent last time is new (or was recycled); its lifetime total is not
+    // a delta, and a recycled pid can read backwards, so only forward deltas count.
+    if (before === undefined) continue;
+    const dNs = ns - before;
+    if (dNs <= 0) continue;
+    const pct = (dNs / elapsedNs) * 100;
+    if (!top || pct > top.pct) top = { pct, name: names.get(pid) };
+  }
+
+  if (!top || top.pct < GPU_HOT_FLOOR_PCT) return null;
+  return { name: top.name, gpuPct: clampPct(top.pct) };
 }
 
 // ── Memory ────────────────────────────────────────────────────────────────────
@@ -304,6 +400,7 @@ function emptySample() {
     battery: null,
     thermal: null,
     hot: null,
+    gpuHot: null,
     warnings: []
   };
 }
@@ -320,10 +417,11 @@ async function sample() {
     const doSlow = forceAll || tick % SLOW_EVERY === 0;
     tick++;
 
-    const [gpu, memory, procs, battery, thermal] = await Promise.all([
+    const [gpu, memory, procs, gpuHot, battery, thermal] = await Promise.all([
       sampleGpu(),
       sampleMemory(),
       doProcs ? sampleProcesses() : Promise.resolve(undefined),
+      doProcs ? sampleGpuProcs() : Promise.resolve(undefined),
       doSlow ? sampleBattery() : Promise.resolve(undefined),
       doSlow ? sampleThermal() : Promise.resolve(undefined)
     ]);
@@ -338,6 +436,7 @@ async function sample() {
       battery: battery === undefined ? latest.battery : battery,
       thermal: thermal === undefined ? latest.thermal : thermal,
       hot: procs === undefined ? latest.hot : (procs?.hot ?? null),
+      gpuHot: gpuHot === undefined ? latest.gpuHot : gpuHot,
       warnings: []
     };
     if (latest.battery?.tempC >= BATTERY_WARM_C) {
@@ -371,6 +470,7 @@ export function startMetrics(onSample) {
 
   prevCpu = cpuSnapshot();
   prevProcs = null;
+  prevGpuProcs = null;
   tick = 0;
 
   // A subscriber wants a number now, not in ten seconds. Take a quick first
@@ -392,6 +492,7 @@ export function stopMetrics() {
   listener = null;
   prevCpu = null;
   prevProcs = null;
+  prevGpuProcs = null;
 }
 
 // `node metrics.js --json` prints one full reading, matching `parse.js --json`.
@@ -412,7 +513,8 @@ if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
     process.stdout.write(
       `cpu ${m.cpu}% · gpu ${m.gpu}% · mem ${m.memory?.percent}% · ` +
         `bat ${m.battery?.percent}%${m.battery?.charging ? ' charging' : ''} · ` +
-        `hot ${m.hot ? `${m.hot.name} ${m.hot.cpuPct ?? ''}` : 'none'} · ${ms.toFixed(0)}ms\n`
+        `hot ${m.hot ? `${m.hot.name} ${m.hot.cpuPct ?? ''}` : 'none'} · ` +
+        `gpu-hot ${m.gpuHot ? `${m.gpuHot.name} ${m.gpuHot.gpuPct}%` : 'none'} · ${ms.toFixed(0)}ms\n`
     );
   }
   process.exit(0);

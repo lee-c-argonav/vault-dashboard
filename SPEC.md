@@ -295,6 +295,24 @@ markdown is supported and none is needed.
   a privileged sampler on a timer would cost more than the whole feature and
   would put a root surface behind a read-only dashboard. `pmset -g therm` and the
   battery's own sensor are the unprivileged substitutes.
+- **Per-app GPU attribution is unprivileged too.** The GPU cell says how much the
+  GPU is busy, never who; a high reading with no explanation is the whole reason
+  this exists. Each process holding a live Metal context owns
+  `AGXDeviceUserClient` nodes in the IO registry, each tagged with the creating
+  pid (`IOUserClientCreator`) and carrying a cumulative `accumulatedGPUTime`
+  counter. Differencing it per pid over the process-table interval — the same
+  move the CPU ranking makes on `ps` TIME — names the process driving the GPU,
+  from one extra unprivileged `ioreg -c AGXDeviceUserClient`. This is the source
+  Activity Monitor's own per-process GPU column appears to read. The root
+  alternative, `powermetrics --samplers gpu_power`, is refused for the reasons
+  above and is in any case unreliable on Apple Silicon. Honest limits: the
+  counter advances when a command buffer completes, so it tracks ordinary
+  streaming load (video, WebGL, compositing, a stream of Metal work) accurately
+  and only lags a single kernel that pins the GPU for seconds without returning;
+  and it is a process's share of GPU wall time, not a slice of `Device
+  Utilization %`, so the two need not sum. Nullable like every vital, and the
+  client surfaces it only while the GPU cell is itself high, so normal
+  compositing (WindowServer is forever a little busy) never lights the slot.
 
 ## Client behaviour
 
