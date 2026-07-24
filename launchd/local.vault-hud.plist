@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template. launchd carries no environment and needs absolute paths, so replace
+  every /ABSOLUTE/PATH/TO placeholder and the $HOME log paths with real values
+  before installing. `which node` gives the node path. See launchd/README.md.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>local.vault-hud</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/node</string>
+        <string>/ABSOLUTE/PATH/TO/vault-hud/server.js</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/ABSOLUTE/PATH/TO/vault-hud</string>
+    <key>StandardOutPath</key>
+    <string>/Users/YOU/Library/Logs/vault-hud.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOU/Library/Logs/vault-hud.log</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+</dict>
+</plist>

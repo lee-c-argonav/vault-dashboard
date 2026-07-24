@@ -1,0 +1,28 @@
+# Template for .confidential-patterns (which is gitignored — never commit the real one).
+#
+#   cp .confidential-patterns.example .confidential-patterns
+#   # then add your real firm / product / person / account identifiers below
+#
+# scripts/check-no-secrets.sh loads .confidential-patterns and blocks a push if any
+# of these regexes match the committed tree. One POSIX extended-regex per line;
+# matched case-insensitively. Blank lines and # comments are ignored. The real file
+# stays local so the committed gate never leaks the names it guards against.
+#
+# Replace the placeholders below with your own; delete the ones you do not need.
+
+# Firm / brand
+# my-company
+# \bmybrand\b
+
+# Products / project codenames
+# \bmyproduct\b
+# project-codename
+
+# Accounts / handles / refs
+# my-github-org
+# my-team\.internal\.example\.com
+# [a-z0-9]{20}          # e.g. a database/project ref from your .env
+
+# People (real individuals)
+# \b(alice|bob|carol)\b
+# surname

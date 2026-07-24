@@ -1,0 +1,15 @@
+node_modules/
+.DS_Store
+*.log
+
+# Browser-automation output. Screenshots here render the real vault — never commit.
+.playwright-mcp/
+
+# Local, machine-specific config and secrets — never commit.
+.env
+.env.*
+!.env.example
+
+# Real confidential-identifier patterns for the pre-push gate — never commit.
+# Only the .example template is tracked.
+.confidential-patterns
