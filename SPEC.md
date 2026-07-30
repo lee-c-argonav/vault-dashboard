@@ -112,7 +112,7 @@ The single contract between `parse.js`, `server.js`, and `app.js`.
   // Kept split rather than joined: the client sets the label as an eyebrow over
   // the detail, and re-splitting a joined string is guesswork once the label
   // itself contains an em dash. `null` when today's note has no lead line.
-  "focus": { "label": "Morning focus — Project X", "detail": "Get the main structure…" },
+  "focus": { "label": "Morning focus — Project X", "detail": "Sketch the schema before writing…" },
 
   "groups": [
     {
@@ -515,11 +515,11 @@ Behaviours that must hold, each of which broke a real case during the build:
   must **not** appear as a todo (same for `CLAUDE.md:211,237`)
 - `[[2026-07-21-meeting-notes]]` must **not** produce a due date
 - `` `[[wikilinks]]` `` in prose must **not** produce a link or a broken link
-- `40-Daily/2026-08-03.md` ("Check 401k") must be `scheduled`, and must not count
+- `40-Daily/2026-08-03.md` ("Renew the domain") must be `scheduled`, and must not count
   as open or stale
 - `40-Daily/*` notes must never appear as orphans
-- `focus` must resolve to `{label: "Morning focus — Project X", detail: "Get the
-  main structure going and get \`plan.md\` ready to start coding against"}`
+- `focus` must resolve to `{label: "Morning focus — Project X", detail: "Sketch the
+  schema before writing any of the loader"}`
 - `stale30` is legitimately 0: every in-scope file's mtime is 2026-07-20 or later
 
 Live-update verification, run against an `rsync` copy of the vault so the real one
