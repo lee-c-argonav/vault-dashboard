@@ -193,6 +193,15 @@ Flag ANY content that must not be public:
 - private knowledge-base content (real todos, notes, decisions, meeting content)
 Obvious placeholders are FINE and must NOT be flagged: OWNER, YOUR-VAULT, /Users/YOU,
 /ABSOLUTE/PATH, project-x, project-y, project-z, example.com, foo, bar.
+
+Commit author/committer identity whose email ends in @users.noreply.github.com is
+the account's PUBLIC GitHub identity and must NOT be flagged, whatever the account
+name spells. GitHub publishes the owning account in the clone URL and on the repo
+page of every public repository, so that name cannot be made non-public by editing
+anything in this push, and reporting it blocks every push without a fix existing.
+Whether the account itself should be renamed is a decision outside this review.
+Identity with any OTHER email domain IS in scope: flag it.
+
 Reply with EXACTLY one first line: "VERDICT: CLEAN" or "VERDICT: LEAK".
 If LEAK, add one bullet per finding: "- <path>: <what and why>".
 PROMPT
