@@ -7,6 +7,11 @@
 # HEAD), so `git push --all` / `--mirror` cannot slip a confidential branch
 # (e.g. backup/pre-purge) past a gate that only ever looked at the current HEAD.
 #
+# The remote sha is passed through as the gate's second argument so it can scan the
+# commit MESSAGES in <remote sha>..<local sha> — exactly the commits this push adds.
+# A new branch sends the all-zero remote sha, which the gate reads as "everything
+# reachable", the correct reading for such a push.
+#
 # Install (symlink so edits to the tracked script take effect with no reinstall):
 #     ln -sf ../../scripts/pre-push-hook.sh .git/hooks/pre-push
 #
@@ -30,7 +35,7 @@ while read -r localref localsha remoteref remotesha; do
   seen="$seen$localsha "
 
   printf '\n\033[1mpre-push gate → %s (%s)\033[0m\n' "${localref#refs/heads/}" "${localsha:0:12}"
-  bash "$gate" "$localsha" || status=1
+  bash "$gate" "$localsha" "${remotesha:-}" || status=1
 done
 
 if [ "$status" -ne 0 ]; then
