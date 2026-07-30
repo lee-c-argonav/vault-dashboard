@@ -13,10 +13,14 @@
 import { homedir } from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
+import { fileURLToPath } from 'node:url';
 
 import { buildClaims } from './claims.js';
 import { checkClaim, checkDecision, getNote } from './check.js';
 
+if (!process.env.VAULT_HUD_VAULT) {
+  try { process.loadEnvFile(path.join(path.dirname(fileURLToPath(import.meta.url)), '.env')); } catch { /* no .env is fine */ }
+}
 const VAULT = process.env.VAULT_HUD_VAULT ?? path.join(homedir(), 'Obsidian', 'vault');
 
 const TOOLS = [

@@ -301,17 +301,31 @@ different predicate exists; in a vault that manufactures false rejections.
 for `Linear` does not match `scaleLinear`, and falls back to substring only when word
 matching finds nothing — reporting `matchMode` either way.
 
-### As an MCP server
+### Calling it from another repo
+
+The CLI is the interface. It resolves the vault from this repo's `.env`, so it needs no
+environment prefix and no setup:
 
 ```sh
-claude mcp add vault --scope user \
-  --env VAULT_HUD_VAULT=/path/to/vault \
-  -- node /path/to/vault-hud/mcp-vault.mjs
+node /path/to/vault-hud/check.js decision "some topic"
 ```
 
-Exposes `check_claim`, `check_decision`, `get_note`. The index is rebuilt per call. A full
-parse of a few hundred notes measures ~10ms (worst observed 18ms), and a stale answer
-about your own vault is worse than a cheap one.
+That is what makes it usable from an agent session in an unrelated repo: one Bash call,
+JSON on stdout, no service to keep running.
+
+`mcp-vault.mjs` wraps the same three functions as an MCP server if you want them in a
+tool list instead:
+
+```sh
+claude mcp add vault --scope user -- node /path/to/vault-hud/mcp-vault.mjs
+```
+
+It is **optional and off by default**. MCP buys discovery — the tools appear without the
+agent being told they exist — and costs three tool schemas in the context of every
+session, including all the ones that never touch the vault. Naming the command in a
+document you already load is usually the better trade. The index is rebuilt per call
+either way: a full parse of a few hundred notes measures ~10ms (worst observed 18ms), and
+a stale answer about your own vault is worse than a cheap one.
 
 ## Repository layout
 

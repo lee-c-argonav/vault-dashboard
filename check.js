@@ -15,6 +15,10 @@
 
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const join = path.join;
 
 import { buildClaims } from './claims.js';
 import { buildResolver } from './parse.js';
@@ -133,11 +137,22 @@ export function getNote(index, name) {
   };
 }
 
+// Resolve the vault the same way server.js does: an explicit env var wins, else the
+// repo's own .env, else the generic default. Without this the CLI needs a
+// VAULT_HUD_VAULT prefix on every invocation from another repo, which is exactly the
+// friction that stops it being used.
+function vaultPathFromEnv() {
+  if (!process.env.VAULT_HUD_VAULT) {
+    try { process.loadEnvFile(join(HERE, '.env')); } catch { /* no .env is fine */ }
+  }
+  return process.env.VAULT_HUD_VAULT ?? join(homedir(), 'Obsidian', 'vault');
+}
+
 // ── CLI ──────────────────────────────────────────────────────────────────────
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const [cmd, ...rest] = process.argv.slice(2);
-  const vaultPath = process.env.VAULT_HUD_VAULT ?? path.join(homedir(), 'Obsidian', 'vault');
+  const vaultPath = vaultPathFromEnv();
   const index = await buildClaims(vaultPath);
 
   const run = {
