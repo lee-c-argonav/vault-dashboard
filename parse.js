@@ -19,11 +19,11 @@ const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
 const TODO_RE = /^\s*[-*]\s+\[( |x|X)\]\s+(.+)$/;
 const CHECKBOX_RE = /^\s*[-*]\s+\[[ xX]\]/;
-const H2_RE = /^##\s+(.+?)\s*$/;
+export const H2_RE = /^##\s+(.+?)\s*$/;
 const FENCE_RE = /^\s*(`{3,}|~{3,})/;
 const WIKILINK_RE = /\[\[([^\]\n]+)\]\]/g;
 const CODE_SPAN_RE = /(`[^`]+`)/;
-const DECISION_RE = /^\s*[-*]\s+\[(\d{4}-\d{2}-\d{2})\]\s+[—-]\s+(.+)$/;
+export const DECISION_RE = /^\s*[-*]\s+\[(\d{4}-\d{2}-\d{2})\]\s+[—-]\s+(.+)$/;
 const FOCUS_RE = /^\*\*(.+?)\*\*\s*(.*)$/;
 // Digit-boundary anchored, so a date is not matched out of the middle of a
 // longer run of digits (an id, a version string, a phone number).
@@ -58,7 +58,7 @@ async function walk(root, rel, out) {
 }
 
 /** In-scope note paths, vault-relative, sorted. Scanned dirs recurse; the root does not. */
-async function collectNotes(vaultPath) {
+export async function collectNotes(vaultPath) {
   const paths = [];
   for (const entry of await readdir(vaultPath, { withFileTypes: true })) {
     if (entry.name.startsWith('.')) continue;
@@ -74,7 +74,7 @@ async function collectNotes(vaultPath) {
  * Blank out fenced code blocks, delimiters included, keeping every line index
  * intact so reported line numbers still match the file on disk.
  */
-function stripFences(lines) {
+export function stripFences(lines) {
   let fence = null;
   return lines.map((line) => {
     const m = FENCE_RE.exec(line);
@@ -111,7 +111,7 @@ const SAFE_URL_RE = /^(https?:|mailto:|obsidian:\/\/open\?)/i;
  * and `\|` still separates target from alias. Splitting on the raw text instead
  * yields the target `target\` and reports a broken link.
  */
-function splitWikilink(inner) {
+export function splitWikilink(inner) {
   const [beforeAlias, ...rest] = inner.replace(/\\\|/g, '|').split('|');
   const target = beforeAlias.split(/[#^]/)[0].trim();
   return { target, label: (rest.length ? rest.join('|') : beforeAlias).trim() };
@@ -149,7 +149,7 @@ export function renderInline(text, hrefFor) {
  * then a unique basename. A basename shared by two notes stays unresolved — a
  * vault usually has at least one, and it is worth surfacing.
  */
-function buildResolver(notePaths) {
+export function buildResolver(notePaths) {
   const byPath = new Map();
   const byBase = new Map();
   for (const p of notePaths) {
@@ -176,7 +176,7 @@ function buildResolver(notePaths) {
  * backticks, so neither do we. Without this, prose that merely *names* the syntax
  * (`[[wikilinks]]` in the vault's own docs) is counted as four broken links.
  */
-const wikilinkTargets = (line) =>
+export const wikilinkTargets = (line) =>
   [...line.replace(/`[^`]*`/g, ' ').matchAll(WIKILINK_RE)]
     .map((m) => splitWikilink(m[1]).target)
     .filter(Boolean);

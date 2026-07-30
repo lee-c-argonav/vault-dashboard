@@ -13,3 +13,7 @@ node_modules/
 # Real confidential-identifier patterns for the pre-push gate — never commit.
 # Only the .example template is tracked.
 .confidential-patterns
+
+# Claim-index dumps render real vault content — never commit.
+out/
+*.claims.json

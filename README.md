@@ -249,15 +249,83 @@ The window never goes blank.
 - **No secrets in the repo.** Vault paths and account-specific URLs live only in the
   gitignored `.env`. See [`CLAUDE.md`](CLAUDE.md) for the public-repo rule.
 
+## The claim layer (`claims.js`, `check.js`, `mcp-vault.mjs`)
+
+The dashboard shows you the vault. The claim layer lets an *agent* ask what the vault
+asserts, with citations. Same parser, no extra dependencies, still read-only.
+
+A wikilink says two notes touch. A **claim** says what the relation is and which file
+and line asserted it. The predicate comes from the enclosing `##` heading, so existing
+section conventions carry the typing and nothing is annotated by hand:
+
+| Enclosing section | Predicate | Human-asserted |
+|---|---|---|
+| `## Decisions`, `## Recent decisions` | `decided_about` | |
+| `## Key docs & references` | `references` | |
+| `## Related patterns and standards` | `governed_by` | ✓ |
+| `## What it is`, `## Guiding values` | `describes` | ✓ |
+| `## Todos` | `todo_on` | |
+| `## Worked on` | `worked_on` | |
+| anything else | `related_to` | |
+
+The map is deliberately small: a predicate graduates only when a real query needs it.
+Everything else falls back to `related_to` and is reported by `--unmapped`, so the map
+grows on evidence rather than on speculation.
+
+*Human-asserted* marks the HUMAN ZONE sections of the project-hub template — sections an
+agent may never write, so a claim from one carries a human's assertion.
+
+```sh
+npm run claims                 # summary: claims per predicate, decisions, unresolved
+node claims.js --unmapped      # sections that fell back, with counts
+node claims.js --json          # the full index
+
+node check.js claim  <subject> <predicate> <object>
+node check.js decision <query text>
+node check.js note   <note name>
+```
+
+### Verdicts, and what they refuse to say
+
+- `supported` — asserted; every source file and line is cited
+- `related` — the notes are linked, under a *different* predicate. **Not a contradiction.**
+- `no vault evidence` — a note is unknown, or nothing connects them
+
+`vetoBasis` is `false` on every verdict. A link graph holds assertions, not refutations,
+so it can never prove a negative — silence is not disagreement. This is a deliberate
+divergence from the design this was lifted from, which reports `contradicted` whenever a
+different predicate exists; in a vault that manufactures false rejections.
+
+`check_decision` searches the dated decision ledger, which is where most real questions
+("did we decide X?") are actually answered. It matches on word boundaries, so a search
+for `Linear` does not match `scaleLinear`, and falls back to substring only when word
+matching finds nothing — reporting `matchMode` either way.
+
+### As an MCP server
+
+```sh
+claude mcp add vault --scope user \
+  --env VAULT_HUD_VAULT=/path/to/vault \
+  -- node /path/to/vault-hud/mcp-vault.mjs
+```
+
+Exposes `check_claim`, `check_decision`, `get_note`. The index is rebuilt per call — a
+full parse is single-digit milliseconds, and a stale answer about your own vault is worse
+than a cheap one.
+
 ## Repository layout
 
 ```
 server.js      HTTP + SSE server, loads .env, binds 127.0.0.1
 parse.js       vault → State (the parser); runnable standalone
+claims.js      vault → typed, sourced claims; runnable standalone
+check.js       verdicts over the claim index (supported / related / no evidence)
+mcp-vault.mjs  read-only MCP server exposing the three check tools
 shortcuts.js   the narrow command surface for the action bar
 metrics.js     macOS machine vitals sampler
 tools.json     shortcut-bar definitions (uses ${VAR} from .env)
 public/        the static frontend (index.html, app.js, hud.css, sw.js, icons)
+test/          node:test suites over a synthetic fixture vault
 launchd/       login-job template + instructions
 SPEC.md        the full design spec
 ```
