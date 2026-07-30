@@ -4,9 +4,9 @@
 // The point of this layer is to replace "this seems off" with a verdict class and
 // a citation. Its most important property is what it REFUSES to say.
 //
-// The reference implementation this is lifted from (personal-graph-kit's
-// mcp-server.mjs) returns `contradicted` whenever two entities are linked under
-// any predicate other than the asserted one. That is wrong for a vault: a note
+// The graph-backed design this borrows from returns `contradicted` whenever two
+// entities are linked under any predicate other than the asserted one. That
+// generalises badly to a link graph over prose: a note
 // being `related_to` another rather than `references` is not a contradiction, and
 // reporting one manufactures exactly the false vetoes this surface exists to
 // prevent. Differing predicates report `related` here, and `vetoBasis` is false on

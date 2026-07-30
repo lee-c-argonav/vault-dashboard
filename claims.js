@@ -15,10 +15,8 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 
 import {
-  collectNotes, stripFences, buildResolver, wikilinkTargets, H2_RE, DECISION_RE,
+  collectNotes, stripFences, buildResolver, wikilinkTargets, H2_RE, DECISION_RE, DAILY_NOTE_RE,
 } from './parse.js';
-
-const DAILY_NOTE_RE = /^40-Daily\/(\d{4}-\d{2}-\d{2})\.md$/;
 
 /**
  * Enclosing `##` section (lowercased) → predicate.

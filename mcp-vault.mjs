@@ -6,8 +6,9 @@
 //
 // Read-only is structural, not promised: this process imports only buildClaims and
 // the three pure verdict functions, and no code path it can reach opens a file for
-// writing. The index is rebuilt per call — a full parse is single-digit
-// milliseconds, and a stale answer about your own vault is worse than a cheap one.
+// writing. The index is rebuilt per call — a full parse of a few hundred notes
+// measures ~10ms (worst observed 18ms), and a stale answer about your own vault is
+// worse than a cheap one.
 
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -28,7 +29,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        subject: { type: 'string', description: 'Note name, e.g. "argo"' },
+        subject: { type: 'string', description: 'Note name, e.g. "vault-hud"' },
         predicate: { type: 'string', description: 'One of: decided_about, references, governed_by, describes, todo_on, worked_on, related_to' },
         object: { type: 'string', description: 'Note name' },
       },

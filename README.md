@@ -309,9 +309,9 @@ claude mcp add vault --scope user \
   -- node /path/to/vault-hud/mcp-vault.mjs
 ```
 
-Exposes `check_claim`, `check_decision`, `get_note`. The index is rebuilt per call — a
-full parse is single-digit milliseconds, and a stale answer about your own vault is worse
-than a cheap one.
+Exposes `check_claim`, `check_decision`, `get_note`. The index is rebuilt per call. A full
+parse of a few hundred notes measures ~10ms (worst observed 18ms), and a stale answer
+about your own vault is worse than a cheap one.
 
 ## Repository layout
 

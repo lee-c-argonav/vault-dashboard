@@ -28,7 +28,7 @@ const FOCUS_RE = /^\*\*(.+?)\*\*\s*(.*)$/;
 // Digit-boundary anchored, so a date is not matched out of the middle of a
 // longer run of digits (an id, a version string, a phone number).
 const ISO_DATE_RE = /(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)/g;
-const DAILY_NOTE_RE = /^40-Daily\/(\d{4}-\d{2}-\d{2})\.md$/;
+export const DAILY_NOTE_RE = /^40-Daily\/(\d{4}-\d{2}-\d{2})\.md$/;
 const INBOX_DATE_RE = /^00-Inbox\/(\d{4}-\d{2}-\d{2})-/;
 
 // ── dates ────────────────────────────────────────────────────────────────────
