@@ -141,6 +141,21 @@ The single contract between `parse.js`, `server.js`, and `app.js`.
     "edges": [ { "source": "40-Daily/2026-07-22", "target": "10-Projects/project-x" } ]
   },
 
+  // One entry per file in the vault's 15-Runs/. Every field is whitelisted and
+  // type-checked by runs.js; a malformed file costs its own row, never the parse.
+  // Deliberately carries NO clock-derived value: app.js guards renders with a
+  // JSON.stringify diff and the server rebroadcasts on a timer, so a "quiet for
+  // Nm" field here would make every broadcast look changed. Liveness is derived
+  // in public/runs-view.js instead, which both the HUD and the phone page import.
+  "runs": [
+    { "runId": "widget-20260806-1432", "project": "widget", "goal": "Widget goal",
+      "machine": "laptop", "state": "running", "note": "One plain sentence.",
+      "started": "2026-08-06T14:32:00.000Z", "updated": "2026-08-06T15:04:00.000Z",
+      "units": [ /* Unit */ ],
+      "needsInput": [ { "question": "…", "since": "…" } ],
+      "blockers": [ { "what": "…", "since": "…" } ] }
+  ],
+
   "health": {
     "notes": 46,
     "links": 104,
@@ -153,6 +168,23 @@ The single contract between `parse.js`, `server.js`, and `app.js`.
   "warnings": []    // non-fatal parse notes, rendered as a dim strip if non-empty
 }
 ```
+
+### Run
+
+A run's own `state` is `running`, `paused` or `done`. A unit's `state` is `todo`,
+`running`, `done`, `blocked` or `failed`.
+
+**There is no `stale` value and no writer ever sets one.** A run that crashed
+cannot write that it crashed, so liveness is inferred from `updated` by
+`public/runs-view.js` and shown as quiet time alongside whatever state the run
+was last in. `NEEDS YOU · QUIET 1h04m` is a run that asked a question and then
+died; collapsing that into a single `stale` state would hide the question.
+
+`started`/`ended` on completed units are what make the ETA measured. A completed
+unit missing either is invisible to the estimate, and the estimate is suppressed
+entirely below three samples.
+
+The write contract lives in the vault at `60-Standards/run-status.md`.
 
 ### Todo
 
@@ -260,8 +292,11 @@ markdown is supported and none is needed.
 ## Server behaviour
 
 - On boot: parse once, cache the State.
-- `fs.watch(vaultPath, { recursive: true })` → ignore excluded paths and
-  non-`.md` files → 150 ms trailing debounce → re-parse → broadcast.
+- `fs.watch(vaultPath, { recursive: true })` → ignore excluded paths and any file
+  that is neither `.md` nor `.json` → 150 ms trailing debounce → re-parse →
+  broadcast. `.json` is in the filter for `15-Runs/`; without it a run file
+  changing would only surface on the 10 s safety refresh, which is the whole
+  point of the runs panel.
 - Full re-parse every time. 46 files takes ~10 ms; incremental parsing would be
   strictly worse code for no measurable gain.
 - SSE at `/events`: `data: <json>\n\n` per update, plus a `:keepalive` comment

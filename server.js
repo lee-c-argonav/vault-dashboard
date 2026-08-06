@@ -342,7 +342,10 @@ function relevant(filename) {
   for (const dir of parts) {
     if (dir.startsWith('.') || EXCLUDED_DIRS.has(dir)) return false;
   }
-  return base.toLowerCase().endsWith('.md') && !base.startsWith('.');
+  const lower = base.toLowerCase();
+  // .json for 15-Runs. A run file changing is exactly the event the runs panel
+  // exists for; without this it would only surface on the 10s safety refresh.
+  return (lower.endsWith('.md') || lower.endsWith('.json')) && !base.startsWith('.');
 }
 
 function scheduleRefresh() {

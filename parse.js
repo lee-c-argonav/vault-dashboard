@@ -5,6 +5,7 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { readRuns } from './runs.js';
 
 const SCANNED_DIRS = [
   '00-Inbox', '10-Projects', '20-Research', '30-Reading',
@@ -372,6 +373,7 @@ export default async function parseVault(vaultPath) {
       .sort((a, b) => b.date.localeCompare(a.date) || a.source.localeCompare(b.source))
       .slice(0, MAX_DECISIONS),
     graph: { nodes, edges },
+    runs: await readRuns(root),
     health: {
       notes: notes.length,
       links: linkCount,
