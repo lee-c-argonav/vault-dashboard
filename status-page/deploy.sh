@@ -24,6 +24,21 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VAULT="${VAULT_HUD_VAULT:-$HOME/Desktop/lee-vault/lee-main}"
 
+# The team and the page URL are machine- and account-specific, so they live in
+# the gitignored .env like every other such value in this repo. The URL in
+# particular is the ONLY access control the page has: it is an obscured slug on
+# a page that serves real vault content to an unauthenticated GET, so committing
+# it to a public repo would hand it to anyone. See .env.example.
+if [ -f "$HERE/../.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$HERE/../.env"
+  set +a
+fi
+
+: "${VERCEL_SCOPE:?set VERCEL_SCOPE in .env (see .env.example)}"
+: "${STATUS_PAGE_URL:?set STATUS_PAGE_URL in .env (see .env.example)}"
+
 command -v vercel >/dev/null 2>&1 || {
   echo "vercel CLI not installed. Run: npm i -g vercel" >&2
   exit 1
@@ -46,7 +61,7 @@ for icon in apple-touch-icon.png favicon-32.png icon-192.png icon-512.png icon-m
 done
 
 cd "$HERE" || exit 1
-out=$(vercel deploy --prod --yes --scope "${VERCEL_SCOPE:-argonav}" 2>&1)
+out=$(vercel deploy --prod --yes --scope "$VERCEL_SCOPE" 2>&1)
 status=$?
 if [ "$status" -ne 0 ]; then
   echo "$out" >&2
@@ -56,7 +71,7 @@ fi
 
 # The per-deployment URL changes every push; the alias is the bookmark. Print
 # the alias when the CLI reports one, and fall back to its own tail if not.
-alias_line=$(printf '%s\n' "$out" | grep -o 'https://run-status-phw7styrdwuwtok7\.vercel\.app' | head -1)
+alias_line=$(printf '%s\n' "$out" | grep -oF "$STATUS_PAGE_URL" | head -1)
 if [ -n "$alias_line" ]; then
   echo "deployed → $alias_line"
 else
