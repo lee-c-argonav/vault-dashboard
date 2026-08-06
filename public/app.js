@@ -215,7 +215,10 @@ const UNIT_WINDOW = 6;
  * a brief orange confirm, a brief amber miss.
  */
 async function openRunTerminal(runId, row) {
-  row.classList.add('busy');
+  // Re-find by id each time. The round trip is ~2.2s, a rebuild can happen
+  // inside it, and a class written to a detached node is feedback nobody sees.
+  const find = () => document.querySelector(`[data-run-id="${CSS.escape(runId)}"]`) ?? row;
+  find().classList.add('busy');
   let ok = false;
   try {
     const res = await fetch('/action', {
@@ -227,11 +230,12 @@ async function openRunTerminal(runId, row) {
   } catch {
     ok = false;
   }
-  row.classList.remove('busy');
+  const live = find();
+  live.classList.remove('busy');
   // A miss is normal: the session may have been closed since it recorded its
   // tty. Say so briefly rather than failing silently or throwing a dialog.
-  row.classList.add(ok ? 'hit' : 'miss');
-  setTimeout(() => row.classList.remove('hit', 'miss'), 900);
+  live.classList.add(ok ? 'hit' : 'miss');
+  setTimeout(() => find().classList.remove('hit', 'miss'), 900);
 }
 
 /**
@@ -278,10 +282,7 @@ function unitList(units, now) {
         why = 'This unit is running but recorded no start time';
       } else {
         const ms = now - Date.parse(u.started);
-        if (!Number.isFinite(ms)) {
-          t = 'bad stamp'; bad = true;
-          why = `Unparseable start time: ${u.started}`;
-        } else if (ms < 0) {
+        if (ms < 0) {
           t = `+${humanMs(-ms)}`; bad = true;
           why = `Start time is ${humanMs(-ms)} in the future: ${u.started}`;
         } else {
@@ -321,16 +322,32 @@ function unitList(units, now) {
         const alabel = el('span', 'run-a-label', a.label);
         alabel.title = a.label;
         sub.append(alabel);
+        // Same quantity as a unit duration, so it takes the same branches. A
+        // second, quieter rendering was how a future agent stamp went unflagged.
         let at = '';
+        let abad = false;
+        let awhy = '';
         if (a.state === 'done' && a.started && a.ended) {
           at = humanMs(Date.parse(a.ended) - Date.parse(a.started));
-        } else if (a.state === 'running' && a.started) {
-          const ms = now - Date.parse(a.started);
-          at = ms >= 0 ? humanMs(ms) : `+${humanMs(-ms)}`;
-        } else if (a.state !== 'todo' && a.state !== 'running') {
+        } else if (a.state === 'running') {
+          if (!a.started) {
+            at = 'no start'; abad = true;
+            awhy = 'This agent is running but recorded no start time';
+          } else {
+            const ms = now - Date.parse(a.started);
+            if (ms < 0) {
+              at = `+${humanMs(-ms)}`; abad = true;
+              awhy = `Start time is ${humanMs(-ms)} in the future: ${a.started}`;
+            } else {
+              at = humanMs(ms);
+            }
+          }
+        } else if (a.state !== 'todo') {
           at = a.state;
         }
-        sub.append(el('span', 'run-a-t', at));
+        const atn = el('span', `run-a-t${abad ? ' is-bad' : ''}`, at);
+        if (awhy) atn.title = awhy;
+        sub.append(atn);
         wrap.append(sub);
       }
     }
@@ -388,6 +405,7 @@ function runRow(r, now) {
   // server-side from the live agent processes, and when it cannot the click
   // fails visibly in amber. Gating on r.tty here made a resolvable run look
   // permanently dead.
+  row.dataset.runId = r.runId;
   row.dataset.clickable = '';
   row.title = r.tty
     ? `Open the terminal running this (${r.tty})`
@@ -428,7 +446,7 @@ function renderRuns(runs) {
 }
 
 // Rank a repo by the worst thing inside it, so the group holding the run that
-// needs Lee sorts first. Grouping otherwise buries the urgent row at an
+// needs the operator sorts first. Grouping otherwise buries the urgent row at an
 // unpredictable depth, which is the one thing this panel cannot afford.
 const URGENCY = { 'needs-input': 0, blocked: 1, running: 2, paused: 3, done: 4 };
 

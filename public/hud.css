@@ -446,7 +446,7 @@ body {
 /* ── main split ─────────────────────────────────────────────────────────── */
 
 /* Two panels, full height, nothing nested. The todos/due column, the decisions
-   panel and the whole bottom row came out 2026-08-06 at Lee's ask, so main is
+   panel and the whole bottom row came out 2026-08-06 at the owner's ask, so main is
    simply runs beside the lattice and both get the entire row. */
 .main {
   display: grid;
@@ -500,7 +500,11 @@ body {
    vocabulary: orange confirms, amber misses. */
 .run[data-clickable] { cursor: pointer; }
 .run[data-clickable]:hover { background: var(--panel-2); }
-.run.busy, .run.hit { outline: 1px solid var(--orange); outline-offset: -1px; }
+/* is-needs-input already paints --panel-2, so it needs its own hover or the
+   loudest row is the only one that does not respond to the pointer. */
+.run.is-needs-input[data-clickable]:hover { background: var(--rule); }
+.run.busy { outline: 1px dashed var(--dim); outline-offset: -1px; }
+.run.hit  { outline: 1px solid var(--orange); outline-offset: -1px; }
 .run.miss { outline: 1px solid var(--amber); outline-offset: -1px; }
 
 .run-top { display: flex; align-items: baseline; gap: 9px; }
@@ -522,7 +526,7 @@ body {
   color: var(--dim);
 }
 
-/* An outlined chip by default, inverted only when it needs Lee. .wglyph reserves
+/* An outlined chip by default, inverted only when it needs the operator. .wglyph reserves
    inversion for the warning strip; this is the panel's one alarm and it is small
    on purpose. Size carries the signal, not a field of colour. */
 .run-state {
@@ -532,13 +536,15 @@ body {
   border: 1px solid var(--rule-hot);
   font: 10px/1 var(--mono);
   letter-spacing: .13em;
-  text-transform: uppercase;
   color: var(--dim);
   white-space: nowrap;
 }
 .run.is-needs-input .run-state { color: var(--bg); background: var(--orange); border-color: var(--orange); }
 .run.is-blocked .run-state { color: var(--amber); border-color: var(--amber); }
-.run.is-nostamp .run-state { color: var(--amber); border-color: var(--amber); }
+/* background too: needs-input inverts to an orange fill, and setting only the
+   colour left amber text on it at 1.43:1 — unreadable on the one row that
+   matters most. */
+.run.is-nostamp .run-state { color: var(--amber); border-color: var(--amber); background: none; }
 
 .run-note {
   margin-top: 6px;
@@ -591,6 +597,10 @@ body {
 }
 .run-u.is-done .run-u-label, .run-u.is-running .run-u-label { color: var(--bone); }
 .run-u-t {
+  /* Always the last track. `.run-u` has five columns but a row without an agent
+     cluster appends only four children, so auto-placement dropped the duration
+     into the `auto` track and it landed 92px left of every clustered row. */
+  grid-column: 5;
   text-align: right;
   font: 11px/1.45 var(--mono);
   font-variant-numeric: tabular-nums;
@@ -603,6 +613,7 @@ body {
    quantity. Amber marks it as something to fix rather than something to read.
    Scoped through .run-u so it outranks the is-running colour above; at plain
    .run-u-t.is-bad it lost the cascade and rendered orange like a normal timer. */
+.run-u.is-running .run-u-t.is-bad,
 .run-u .run-u-t.is-bad { color: var(--amber); }
 
 /* Subagents. A cluster of dots rides the unit row so a fan-out is visible
@@ -624,7 +635,7 @@ body {
   padding: 2px 0 2px 81px;
 }
 .run-a.is-running .run-a-dot { background: var(--orange); }
-.run-a.is-done .run-a-dot { background: var(--dim); }
+.run-a.is-done .run-a-dot { background: var(--bone); }
 .run-a.is-blocked .run-a-dot { background: var(--amber); }
 .run-a.is-failed .run-a-dot { background: var(--bone); box-shadow: inset 0 0 0 1px var(--orange); }
 
@@ -635,13 +646,14 @@ body {
 }
 .run-a.is-running .run-a-label, .run-a.is-done .run-a-label { color: var(--dim); }
 .run-a-t {
-  font: 10px/1.45 var(--mono);
+  font: 11px/1.45 var(--mono);
   font-variant-numeric: tabular-nums;
   text-align: right;
   color: var(--dimmer);
   white-space: nowrap;
 }
 .run-a.is-running .run-a-t { color: var(--orange-dim); }
+.run-a .run-a-t.is-bad { color: var(--amber); }
 
 /* Overflow markers at either end of the window, so a hidden unit is visible as
    a count rather than silently absent. */

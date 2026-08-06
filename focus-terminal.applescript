@@ -11,6 +11,9 @@
 on run argv
   if (count of argv) is 0 then return "notfound"
   set target to item 1 of argv
+  -- `tell application` LAUNCHES an app that is not running, so without this a
+  -- click with Terminal closed opens a stray window and still returns notfound.
+  if application "Terminal" is not running then return "notfound"
   tell application "Terminal"
     repeat with w in windows
       repeat with t in tabs of w

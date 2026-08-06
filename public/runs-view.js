@@ -46,7 +46,9 @@ export function eta(units) {
     .map((u) => Date.parse(u.ended) - Date.parse(u.started))
     .filter((ms) => Number.isFinite(ms) && ms > 0);
   if (d.length < MIN_SAMPLES) return null;
-  const remaining = units.filter((u) => u.state !== 'done').length;
+  // Only work that can still run. Counting blocked and failed units advertised
+  // time remaining on a run that had stopped.
+  const remaining = units.filter((u) => u.state === 'todo' || u.state === 'running').length;
   if (remaining === 0) return null;
   const mean = d.reduce((a, b) => a + b, 0) / d.length;
   const variance = d.reduce((a, b) => a + (b - mean) ** 2, 0) / d.length;
@@ -83,7 +85,10 @@ export function etaText(e) {
 export function elapsedText(run, now) {
   const t = Date.parse(run.started);
   if (!Number.isFinite(t)) return '';
-  return `${humanMs(now - t)} elapsed`;
+  const ms = now - t;
+  // `-- elapsed` reads as a missing measurement. A future start is a writer bug
+  // and says so, exactly as the unit renderer does.
+  return ms < 0 ? `starts in ${humanMs(-ms)}` : `${humanMs(ms)} elapsed`;
 }
 
 export function stateText(run, now) {
@@ -110,7 +115,9 @@ export function rowSignature(run, now) {
     // because the signature was invariant in `now`. Bucketed to the minute,
     // which is what humanMs prints at, so a row rebuilds when its text actually
     // changes rather than on every 10-second push.
-    run.units.filter((u) => u.state === 'running').map((u) => bucket(u.started, now)).join(','),
+    run.units.filter((u) => u.state === 'running')
+      .flatMap((u) => [bucket(u.started, now),
+        ...u.agents.filter((a) => a.state === 'running').map((a) => bucket(a.started, now))]).join(','),
     bucket(run.started, now),
     bucket(run.needsInput[0]?.since ?? run.blockers[0]?.since, now),
   ].join('\u0000');

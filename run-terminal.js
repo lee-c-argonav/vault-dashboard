@@ -5,8 +5,10 @@
 // reads it from the run's own file in 15-Runs/, which it already parses for the
 // panel, then checks it against a strict device pattern before use. So the only
 // value that can reach osascript is one an agent wrote into the vault, in the
-// shape of a tty device path, and osascript receives it as an `on run argv`
-// argument rather than spliced into the script text.
+// shape of a tty device path, OR one resolved from the live process table by
+// inferTty below. Either way it is checked against TTY_RE before use and reaches
+// osascript as an `on run argv` argument, never spliced into script text and
+// never through a shell.
 //
 // Everything here is best-effort. A run may predate the tty field, its session
 // may have been closed, or Terminal may not be running. None of those are
@@ -100,7 +102,9 @@ async function inferTty(run) {
   const before = candidates
     .filter((c) => Number.isFinite(c.begun) && Number.isFinite(started) && c.begun <= started)
     .sort((a, b) => b.begun - a.begun);
-  return (before[0] ?? candidates[0]).tty;
+  // No usable start stamp means no way to tell two sessions in the same repo
+  // apart. Raising an arbitrary one is worse than raising none.
+  return before[0] ? before[0].tty : '';
 }
 
 function sh(cmd, args) {
