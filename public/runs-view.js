@@ -123,6 +123,36 @@ export function rowSignature(run, now) {
   ].join('\u0000');
 }
 
+/**
+ * The duration cell for a unit OR a sub-agent. One function, because they are
+ * the same quantity and were drifting apart: two copies of these branches meant
+ * a future agent stamp went unflagged while the identical unit case did not.
+ *
+ * Returns the text, whether it is an anomaly rather than a measurement, and why.
+ */
+export function durationOf(x, now) {
+  if (x.state === 'done') {
+    if (x.started && x.ended) {
+      const ms = Date.parse(x.ended) - Date.parse(x.started);
+      if (ms < 0) return { text: 'ends before start', bad: true, why: `ended ${x.ended} precedes started ${x.started}`, state: 'done' };
+      return { text: humanMs(ms), bad: false, why: '', state: 'done' };
+    }
+    return { text: 'no timing', bad: true, why: 'Done but missing a start or end stamp', state: 'done' };
+  }
+  if (x.state === 'running') {
+    if (!x.started) return { text: 'no start', bad: true, why: 'Running but recorded no start time', state: 'running' };
+    const ms = now - Date.parse(x.started);
+    if (ms < 0) {
+      return { text: `+${humanMs(-ms)}`, bad: true,
+        why: `Start time is ${humanMs(-ms)} in the future: ${x.started}`, state: 'running' };
+    }
+    return { text: humanMs(ms), bad: false, why: '', state: 'running' };
+  }
+  // failed and blocked are already carried by the dot, so the cell stays empty
+  // rather than repeating the state as if it were a measurement.
+  return { text: '', bad: false, why: '', state: x.state };
+}
+
 export function counts(units) {
   return { done: units.filter((u) => u.state === 'done').length, total: units.length };
 }

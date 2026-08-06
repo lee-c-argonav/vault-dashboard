@@ -596,25 +596,6 @@ body {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .run-u.is-done .run-u-label, .run-u.is-running .run-u-label { color: var(--bone); }
-.run-u-t {
-  /* Always the last track. `.run-u` has five columns but a row without an agent
-     cluster appends only four children, so auto-placement dropped the duration
-     into the `auto` track and it landed 92px left of every clustered row. */
-  grid-column: 5;
-  text-align: right;
-  font: 11px/1.45 var(--mono);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: .04em;
-  color: var(--dimmer);
-  white-space: nowrap;
-}
-.run-u.is-running .run-u-t { color: var(--orange); }
-/* A stamp that cannot produce a duration is a defect in the writer, not a
-   quantity. Amber marks it as something to fix rather than something to read.
-   Scoped through .run-u so it outranks the is-running colour above; at plain
-   .run-u-t.is-bad it lost the cascade and rendered orange like a normal timer. */
-.run-u.is-running .run-u-t.is-bad,
-.run-u .run-u-t.is-bad { color: var(--amber); }
 
 /* Subagents. A cluster of dots rides the unit row so a fan-out is visible
    without costing a line, and the names appear only under the running unit. */
@@ -645,15 +626,28 @@ body {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .run-a.is-running .run-a-label, .run-a.is-done .run-a-label { color: var(--dim); }
-.run-a-t {
+
+/* One duration component, used by units and by sub-agents. They are the same
+   quantity, so they get one rule set: two copies is how they drifted apart in
+   the first place. State comes from the entity itself, never from the parent
+   row, so a done agent under a running unit still reads as done. */
+.dur {
   font: 11px/1.45 var(--mono);
   font-variant-numeric: tabular-nums;
+  letter-spacing: .04em;
   text-align: right;
-  color: var(--dimmer);
   white-space: nowrap;
+  color: var(--dimmer);
 }
-.run-a.is-running .run-a-t { color: var(--orange-dim); }
-.run-a .run-a-t.is-bad { color: var(--amber); }
+.dur.is-done    { color: var(--dim); }
+.dur.is-running { color: var(--orange); }
+/* An anomaly is not a measurement. Amber outranks both above it. */
+.dur.is-done.is-bad, .dur.is-running.is-bad, .dur.is-bad { color: var(--amber); }
+
+/* Last track in a unit row, last in an agent row. Without an explicit column a
+   row with no agent cluster auto-places it 92px early. */
+.run-u .dur { grid-column: 5; }
+.run-a .dur { grid-column: 3; }
 
 /* Overflow markers at either end of the window, so a hidden unit is visible as
    a count rather than silently absent. */

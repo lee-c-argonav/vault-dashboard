@@ -6,7 +6,7 @@
 // Both import it so the two surfaces cannot disagree about whether a run is
 // waiting on you. Liveness lives here, not in State: State is diffed by
 // stringify below, so a clock-derived field would look changed on every push.
-import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, counts }
+import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, counts }
   from './runs-view.js';
 
 const STATE_SOURCES = ['/api/state'];
@@ -267,33 +267,7 @@ function unitList(units, now) {
     label.title = `${u.id} ${u.label} — ${u.state}`;
     line.append(label);
 
-    // One column, one kind of thing: a duration. The dot on the left already
-    // says the state, so repeating "running" in the text was both redundant and
-    // the reason the two rows never lined up. Anomalies get a short word instead
-    // of a number, in amber, because they are defects rather than measurements.
-    let t = '';
-    let bad = false;
-    let why = '';
-    if (u.state === 'done' && u.started && u.ended) {
-      t = humanMs(Date.parse(u.ended) - Date.parse(u.started));
-    } else if (u.state === 'running') {
-      if (!u.started) {
-        t = 'no start'; bad = true;
-        why = 'This unit is running but recorded no start time';
-      } else {
-        const ms = now - Date.parse(u.started);
-        if (ms < 0) {
-          t = `+${humanMs(-ms)}`; bad = true;
-          why = `Start time is ${humanMs(-ms)} in the future: ${u.started}`;
-        } else {
-          t = humanMs(ms);
-        }
-      }
-    } else if (u.state === 'failed') {
-      t = 'failed';
-    } else if (u.state === 'blocked') {
-      t = 'blocked';
-    }
+    const d = durationOf(u, now);
 
     // A cluster on every unit that fanned out, so you can see that it did
     // without the agent names costing a row each.
@@ -308,8 +282,8 @@ function unitList(units, now) {
         `${u.agents.filter((a) => a.state === 'done').length} of ${u.agents.length} agents done`;
       line.append(cluster);
     }
-    const ut = el('span', `run-u-t${bad ? ' is-bad' : ''}`, t);
-    if (why) ut.title = why;
+    const ut = el('span', `dur is-${d.state}${d.bad ? ' is-bad' : ''}`, d.text);
+    if (d.why) ut.title = d.why;
     line.append(ut);
     wrap.append(line);
 
@@ -322,31 +296,9 @@ function unitList(units, now) {
         const alabel = el('span', 'run-a-label', a.label);
         alabel.title = a.label;
         sub.append(alabel);
-        // Same quantity as a unit duration, so it takes the same branches. A
-        // second, quieter rendering was how a future agent stamp went unflagged.
-        let at = '';
-        let abad = false;
-        let awhy = '';
-        if (a.state === 'done' && a.started && a.ended) {
-          at = humanMs(Date.parse(a.ended) - Date.parse(a.started));
-        } else if (a.state === 'running') {
-          if (!a.started) {
-            at = 'no start'; abad = true;
-            awhy = 'This agent is running but recorded no start time';
-          } else {
-            const ms = now - Date.parse(a.started);
-            if (ms < 0) {
-              at = `+${humanMs(-ms)}`; abad = true;
-              awhy = `Start time is ${humanMs(-ms)} in the future: ${a.started}`;
-            } else {
-              at = humanMs(ms);
-            }
-          }
-        } else if (a.state !== 'todo') {
-          at = a.state;
-        }
-        const atn = el('span', `run-a-t${abad ? ' is-bad' : ''}`, at);
-        if (awhy) atn.title = awhy;
+        const ad = durationOf(a, now);
+        const atn = el('span', `dur is-${ad.state}${ad.bad ? ' is-bad' : ''}`, ad.text);
+        if (ad.why) atn.title = ad.why;
         sub.append(atn);
         wrap.append(sub);
       }
