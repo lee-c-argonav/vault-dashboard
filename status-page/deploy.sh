@@ -40,7 +40,7 @@ VAULT_HUD_VAULT="$VAULT" node "$HERE/build.js" >/dev/null || {
 cp "$HERE/status.html" "$HERE/public/index.html" || exit 1
 
 cd "$HERE" || exit 1
-out=$(vercel deploy --prod --yes 2>&1)
+out=$(vercel deploy --prod --yes --scope "${VERCEL_SCOPE:-argonav}" 2>&1)
 status=$?
 if [ "$status" -ne 0 ]; then
   echo "$out" >&2
@@ -48,6 +48,11 @@ if [ "$status" -ne 0 ]; then
   exit "$status"
 fi
 
-# Print the production URL, not the deployment-specific one, so what is echoed
-# here is the link that stays valid.
-printf '%s\n' "$out" | tail -3
+# The per-deployment URL changes every push; the alias is the bookmark. Print
+# the alias when the CLI reports one, and fall back to its own tail if not.
+alias_line=$(printf '%s\n' "$out" | grep -o 'https://run-status-phw7styrdwuwtok7\.vercel\.app' | head -1)
+if [ -n "$alias_line" ]; then
+  echo "deployed → $alias_line"
+else
+  printf '%s\n' "$out" | tail -3
+fi
