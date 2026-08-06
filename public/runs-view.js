@@ -167,6 +167,25 @@ export function durationOf(x, now) {
 export const UNIT_WINDOW = 5;
 export const UNIT_TAIL = 2;
 
+// How many runs get the full treatment. Five, because that is the realistic
+// ceiling for concurrent sessions and scrolling a handful is fine. Beyond it the
+// rest collapse to one line, which is a safety valve rather than normal use:
+// measured at 20 runs, expanding every one produced 7697px of scroll against
+// 1294px of panel, leaving 17 of 20 below the fold.
+export const EXPAND_LIMIT = 5;
+
+export const URGENCY = { 'needs-input': 0, blocked: 1, running: 2, paused: 3, done: 4 };
+
+/**
+ * Which runs render in full and which collapse. Urgency decides, so whatever
+ * needs the operator expands first. Shared, because a surface that expanded a
+ * different set would be showing a different board.
+ */
+export function expandSet(runs) {
+  const order = [...runs].sort((a, b) => URGENCY[runState(a)] - URGENCY[runState(b)]);
+  return new Set(order.slice(0, EXPAND_LIMIT).map((r) => r.runId));
+}
+
 /**
  * Which units to show, for any surface. A long run cannot render every unit, so
  * this returns a window around wherever the run currently is plus the final

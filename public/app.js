@@ -6,7 +6,7 @@
 // Both import it so the two surfaces cannot disagree about whether a run is
 // waiting on you. Liveness lives here, not in State: State is diffed by
 // stringify below, so a clock-derived field would look changed on every push.
-import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, counts }
+import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, counts }
   from './runs-view.js';
 
 const STATE_SOURCES = ['/api/state'];
@@ -302,7 +302,7 @@ function unitList(units, now) {
   return wrap;
 }
 
-function runRow(r, now) {
+function runRow(r, now, expanded = true) {
   const st = runState(r);
   const nostamp = quietMs(r, now) === null;
   const row = el('div', `run is-${st}${nostamp ? ' is-nostamp' : ''}`);
@@ -315,6 +315,15 @@ function runRow(r, now) {
   // shared module exists so the two surfaces cannot drift apart on it.
   top.append(el('span', 'run-state', stateText(r, now)));
   row.append(top);
+
+  if (!expanded) {
+    // One line: goal, state, progress. Enough to decide whether to look closer,
+    // and nothing that costs vertical space you do not have beyond a handful.
+    row.classList.add('is-collapsed');
+    const c0 = counts(r.units);
+    top.append(el('span', 'run-mini', `${c0.done}/${c0.total}`));
+    return row;
+  }
 
   if (r.note) {
     const note = el('div', 'run-note', r.note);
@@ -394,9 +403,9 @@ function renderRuns(runs) {
 // Rank a repo by the worst thing inside it, so the group holding the run that
 // needs the operator sorts first. Grouping otherwise buries the urgent row at an
 // unpredictable depth, which is the one thing this panel cannot afford.
-const URGENCY = { 'needs-input': 0, blocked: 1, running: 2, paused: 3, done: 4 };
 
 function groupedRows(runs, now) {
+  const expand = expandSet(runs);
   const byRepo = new Map();
   for (const r of runs) {
     const key = r.project || '—';
@@ -423,7 +432,7 @@ function groupedRows(runs, now) {
       rows.push(head);
     }
     for (const r of list.sort((a, b) => (URGENCY[runState(a)] ?? 9) - (URGENCY[runState(b)] ?? 9))) {
-      rows.push(runRow(r, now));
+      rows.push(runRow(r, now, expand.has(r.runId)));
     }
   }
   return rows;

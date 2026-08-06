@@ -676,6 +676,19 @@ body {
 
 .run.is-done .run-goal { color: var(--dim); }
 
+/* Collapsed: one line for a run beyond the handful worth expanding. Everything
+   below the top line is simply not appended, so it costs a line rather than
+   three hundred pixels. */
+.run.is-collapsed { padding: 9px 16px; }
+.run.is-collapsed .run-goal { font-size: 13px; }
+.run-mini {
+  flex: none;
+  font: 11px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .06em;
+  color: var(--dim);
+}
+
 /* The panel tick goes dim when there is nothing to say, exactly as the dark
    cockpit rule wants: unlit is the normal state. */
 .runs:not(.hot) .lab::before { background: var(--dimmer); }
