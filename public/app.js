@@ -6,7 +6,7 @@
 // Both import it so the two surfaces cannot disagree about whether a run is
 // waiting on you. Liveness lives here, not in State: State is diffed by
 // stringify below, so a clock-derived field would look changed on every push.
-import { runState, isQuiet, stateText, eta, humanMs, etaText, counts }
+import { runState, isQuiet, quietMs, stateText, rowSignature, eta, humanMs, etaText, counts }
   from './runs-view.js';
 
 const STATE_SOURCES = ['/api/state'];
@@ -61,7 +61,7 @@ function clickable(node, url) {
   // state to rows that actually navigate.
   node.dataset.clickable = '';
   node.addEventListener('click', (e) => {
-    if (e.target.closest('a, .gdone')) return; // those carry their own behaviour
+    if (e.target.closest('a')) return; // those carry their own behaviour
     openNote(url);
   });
   return node;
@@ -209,7 +209,8 @@ function renderHero(state) {
 function runRow(r, now) {
   const st = runState(r);
   const quiet = isQuiet(r, now);
-  const row = el('div', `run is-${st}${quiet ? ' is-quiet' : ''}`);
+  const nostamp = quietMs(r, now) === null;
+  const row = el('div', `run is-${st}${quiet ? ' is-quiet' : ''}${nostamp ? ' is-nostamp' : ''}`);
   row.append(el('span', 'run-rail'));
 
   const main = el('div', 'run-main');
@@ -229,11 +230,20 @@ function runRow(r, now) {
   // to open is a question that waits another hour.
   const source = st === 'needs-input' ? r.needsInput[0]
     : st === 'blocked' ? r.blockers[0] : null;
-  const ask = source ? (source.question ?? source.what) : '';
-  if (ask) {
-    const age = source.since ? ` · ${humanMs(now - Date.parse(source.since))}` : '';
-    main.append(el('div', 'run-ask', ask + age));
+  let ask = source ? (source.question ?? source.what) : '';
+  let age = source?.since ? ` · ${humanMs(now - Date.parse(source.since))}` : '';
+  // A run can be BLOCKED by a failed unit with no blockers[] entry. Without this
+  // the row says BLOCKED and gives no reason at all.
+  if (!ask && st === 'blocked') {
+    const failed = r.units.filter((u) => u.state === 'failed');
+    if (failed.length) {
+      ask = failed.length === 1
+        ? `Unit ${failed[0].id} failed: ${failed[0].label}`
+        : `${failed.length} units failed: ${failed.map((u) => u.id).join(', ')}`;
+      age = '';
+    }
   }
+  if (ask) main.append(el('div', 'run-ask', ask + age));
 
   if (r.units.length) {
     const bar = el('div', 'run-bar');
@@ -257,13 +267,25 @@ function runRow(r, now) {
   return row;
 }
 
+let runsSig = null;
+
 function renderRuns(runs) {
   const now = Date.now();
   const needing = runs.filter((r) => runState(r) === 'needs-input').length;
   $('p-runs').classList.toggle('hot', needing > 0);
   $('runs-count').textContent =
     `${pad2(runs.length)} RUNS` + (needing ? ` · ${pad2(needing)} NEEDS YOU` : '');
-  fill('runs-list', runs.map((r) => runRow(r, now)), 'NO RUN IS PUBLISHING STATUS');
+
+  // Rebuild only when something displayed actually changed. This render is
+  // unguarded so quiet time keeps advancing, but replaceChildren tears down text
+  // selection, and the whole point of the panel is a question you need to answer
+  // and therefore copy. Signature includes the rendered state text, so a quiet
+  // counter still ticks over, roughly once a minute instead of every 10 seconds.
+  const sig = runs.map((r) => rowSignature(r, now)).join('\n');
+  if (sig !== runsSig) {
+    runsSig = sig;
+    fill('runs-list', runs.map((r) => runRow(r, now)), 'NO RUN IS PUBLISHING STATUS');
+  }
   flashIfChanged($('p-runs'), runs);
 }
 

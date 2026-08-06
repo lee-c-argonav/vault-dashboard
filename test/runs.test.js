@@ -70,14 +70,39 @@ test('eta is a point when durations are tight', () => {
   assert.equal(e.low, undefined);
 });
 
-test('a wide spread gives the observed extremes, not a multiplier band', () => {
+test('a wide spread gives a band centred on the mean, one sd either side', () => {
   const d = (a, b) => ({ state: 'done', started: iso(a), ended: iso(b) });
+  // Samples 5m, 10m, 40m. mean = 18m20s, population sd = 15m27.3s, remaining 1.
   const e = eta([d(T0, T0 + min(5)), d(T0, T0 + min(10)), d(T0, T0 + min(40)),
                  { state: 'todo' }]);
   assert.equal(e.measured, 3);
-  assert.equal(e.low, min(5));    // the fastest unit observed, times 1 remaining
-  assert.equal(e.high, min(40));  // the slowest. The band contains the data.
   assert.equal(e.point, undefined);
+  const mean = (min(5) + min(10) + min(40)) / 3;
+  const sd = Math.sqrt(((min(5) - mean) ** 2 + (min(10) - mean) ** 2 + (min(40) - mean) ** 2) / 3);
+  assert.ok(Math.abs(e.low - (mean - sd)) < 1);
+  assert.ok(Math.abs(e.high - (mean + sd)) < 1);
+});
+
+test('the band never goes negative', () => {
+  const d = (a, b) => ({ state: 'done', started: iso(a), ended: iso(b) });
+  const e = eta([d(T0, T0 + min(1)), d(T0, T0 + min(1)), d(T0, T0 + min(120)),
+                 { state: 'todo' }]);
+  assert.ok(e.low >= 0);
+});
+
+// The bug this replaces: low = min * remaining and high = max * remaining grew
+// the band linearly with the work left, so a long run got a wider and wider
+// estimate. A sum of k draws concentrates, so relative uncertainty must SHRINK.
+test('relative uncertainty shrinks as more units remain', () => {
+  const d = (a, b) => ({ state: 'done', started: iso(a), ended: iso(b) });
+  const done = [d(T0, T0 + min(5)), d(T0, T0 + min(10)), d(T0, T0 + min(40))];
+  const todo = (n) => Array.from({ length: n }, () => ({ state: 'todo' }));
+  const width = (n) => {
+    const e = eta([...done, ...todo(n)]);
+    const mid = e.point ?? (e.low + e.high) / 2;
+    return e.point != null ? 0 : (e.high - e.low) / mid;
+  };
+  assert.ok(width(16) < width(1), 'a 16-unit tail must be relatively tighter than a 1-unit tail');
 });
 
 test('eta is null when nothing remains', () => {

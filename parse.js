@@ -281,7 +281,7 @@ export default async function parseVault(vaultPath) {
         linkCount += 1;
         const { id: targetId, ambiguous } = resolve(target);
         if (!targetId) {
-          const key = `${note.id} ${target}`;
+          const key = `${note.id}\u0000${target}`;
           if (!brokenKeys.has(key)) {
             brokenKeys.add(key);
             broken.push({ source: note.id, link: target });
@@ -293,7 +293,7 @@ export default async function parseVault(vaultPath) {
         if (targetId === note.id) continue;
         outbound.get(note.id).add(targetId);
         inbound.get(targetId).add(note.id);
-        const key = `${note.id} ${targetId}`;
+        const key = `${note.id}\u0000${targetId}`;
         if (!edgeKeys.has(key)) {
           edgeKeys.add(key);
           edges.push({ source: note.id, target: targetId });

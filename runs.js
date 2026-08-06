@@ -33,17 +33,26 @@ export async function readRuns(vaultPath) {
     return [];
   }
   const runs = [];
+  let skipped = 0;
   for (const name of names) {
     if (!name.toLowerCase().endsWith('.json') || name.startsWith('.')) continue;
     let raw;
     try {
-      raw = JSON.parse(await readFile(join(dir, name), 'utf8'));
+      const text = await readFile(join(dir, name), 'utf8');
+      // A leading BOM makes JSON.parse throw forever, not transiently. Without
+      // stripping it a run written by a BOM-emitting editor never appears and
+      // there is nothing to see anywhere explaining why.
+      raw = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
     } catch {
       // A half-written file is normal; the writer may be mid-save. Skipping it
       // for one pass is right, crashing the whole parse over it is not.
+      skipped += 1;
       continue;
     }
-    if (!isObj(raw) || typeof raw.runId !== 'string' || !raw.runId) continue;
+    if (!isObj(raw) || typeof raw.runId !== 'string' || !raw.runId) {
+      skipped += 1;
+      continue;
+    }
     runs.push({
       runId: raw.runId,
       project: str(raw.project),
@@ -53,7 +62,11 @@ export async function readRuns(vaultPath) {
       note: str(raw.note),
       started: isoOrNull(raw.started),
       updated: isoOrNull(raw.updated),
-      units: (Array.isArray(raw.units) ? raw.units : []).filter(isObj).map(normaliseUnit),
+      // An id is required: a bare {} would otherwise normalise into a real unit,
+      // inflating the count and drawing a tick for something that does not exist.
+      units: (Array.isArray(raw.units) ? raw.units : [])
+        .filter((u) => isObj(u) && typeof u.id === 'string' && u.id)
+        .map(normaliseUnit),
       needsInput: (Array.isArray(raw.needsInput) ? raw.needsInput : [])
         .filter(isObj)
         .map((n) => ({ question: str(n.question), since: isoOrNull(n.since) })),
@@ -62,6 +75,19 @@ export async function readRuns(vaultPath) {
         .map((b) => ({ what: str(b.what), since: isoOrNull(b.since) })),
     });
   }
-  runs.sort((a, b) => a.runId.localeCompare(b.runId));
-  return runs;
+  // One run, one row. Two files claiming the same id means a stale copy was left
+  // behind, and the phone page keys on runId, so duplicates corrupt that key
+  // space. The later-updated file is the live writer.
+  const byId = new Map();
+  for (const r of runs) {
+    const prev = byId.get(r.runId);
+    if (!prev || (r.updated ?? '') > (prev.updated ?? '')) byId.set(r.runId, r);
+  }
+  if (byId.size !== runs.length) skipped += runs.length - byId.size;
+  // KNOWN GAP: `skipped` is counted and dropped. A property hung on the returned
+  // array would not survive JSON.stringify into State, so surfacing it properly
+  // means routing it through `warnings` in parse.js. Until then, a file this
+  // reader cannot use is a run that never appears with nothing explaining why.
+  void skipped;
+  return [...byId.values()].sort((a, b) => a.runId.localeCompare(b.runId));
 }
