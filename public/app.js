@@ -276,7 +276,9 @@ function unitList(units, now) {
 
     // A cluster on every unit that fanned out, so you can see that it did
     // without the agent names costing a row each.
-    if (u.agents.length) {
+    // Only where the names are not already listed below. On the running unit the
+    // agents render in full underneath, so a cluster there is the same fact twice.
+    if (u.agents.length && u.state !== 'running') {
       const cluster = el('span', 'run-u-agents');
       for (const a of u.agents) {
         const dot = el('i', `run-a-dot${a.state === 'todo' ? '' : ` is-${a.state}`}`);
