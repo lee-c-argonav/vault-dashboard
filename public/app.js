@@ -6,7 +6,7 @@
 // Both import it so the two surfaces cannot disagree about whether a run is
 // waiting on you. Liveness lives here, not in State: State is diffed by
 // stringify below, so a clock-derived field would look changed on every push.
-import { runState, isQuiet, quietMs, stateText, rowSignature, eta, humanMs, etaText, counts }
+import { runState, isQuiet, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, counts }
   from './runs-view.js';
 
 const STATE_SOURCES = ['/api/state'];
@@ -299,7 +299,9 @@ function runRow(r, now) {
   const c = counts(r.units);
   const e = eta(r.units);
   const foot = el('div', 'run-foot');
-  foot.append(el('span', null, `${c.done} of ${c.total} done`));
+  const elapsed = elapsedText(r, now);
+  foot.append(el('span', null,
+    `${c.done} of ${c.total} done` + (elapsed ? ` · ${elapsed}` : '')));
   foot.append(el('span', null, e ? etaText(e) : ''));
   row.append(foot);
   return row;
