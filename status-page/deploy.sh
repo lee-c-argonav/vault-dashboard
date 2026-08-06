@@ -12,6 +12,12 @@
 #
 # Requires `vercel login` once, interactively, by the person who owns the
 # account. Everything after that is non-interactive.
+#
+# NOT Git-connected, deliberately. status.html carries real vault content — goal
+# names, notes, the questions waiting on you — and vault-hud is a PUBLIC repo, so
+# the file is gitignored. Importing this project from GitHub would either serve
+# an empty page or require committing that content, which must never happen.
+# The CLI uploads the built file straight from this machine instead.
 
 set -uo pipefail
 
