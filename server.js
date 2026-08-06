@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import parseVault from './parse.js';
 import { loadShortcuts, publicShortcuts, runShortcut } from './shortcuts.js';
 import { startMetrics, stopMetrics, currentMetrics } from './metrics.js';
+import { focusRunTerminal, RUN_PREFIX } from './run-terminal.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -277,6 +278,16 @@ function handleAction(req, res) {
     }
     if (typeof id !== 'string') {
       return send(res, 400, '{"error":"missing id"}', 'application/json; charset=utf-8');
+    }
+    // `run:<runId>` focuses the Terminal tab that run is executing in. It is
+    // still only an id from the browser: run-terminal.js resolves the tty from
+    // the run's own file, which this server already parses for the panel.
+    if (id.startsWith(RUN_PREFIX)) {
+      focusRunTerminal(id, VAULT).then((result) => {
+        send(res, result.ok ? 200 : (result.status ?? 500), JSON.stringify(result),
+          'application/json; charset=utf-8');
+      });
+      return;
     }
     const result = runShortcut(id);
     send(res, result.ok ? 200 : (result.status ?? 500), JSON.stringify(result),

@@ -71,6 +71,9 @@ export async function readRuns(vaultPath) {
       machine: str(raw.machine),
       state: RUN_STATES.has(raw.state) ? raw.state : 'running',
       note: str(raw.note),
+      // The Terminal tab this run is executing in, so the HUD can focus it.
+      // Validated against a device pattern in run-terminal.js before it is used.
+      tty: str(raw.tty),
       started: isoOrNull(raw.started),
       updated: isoOrNull(raw.updated),
       // An id is required: a bare {} would otherwise normalise into a real unit,

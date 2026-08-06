@@ -209,6 +209,32 @@ function renderHero(state) {
 const UNIT_WINDOW = 6;
 
 /**
+ * Ask the server to focus the Terminal tab this run is executing in. Sends only
+ * the run id; the server resolves the tty from the run's own file and validates
+ * it before it reaches osascript. Feedback reuses the shortcut bar's vocabulary:
+ * a brief orange confirm, a brief amber miss.
+ */
+async function openRunTerminal(runId, row) {
+  row.classList.add('busy');
+  let ok = false;
+  try {
+    const res = await fetch('/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Vault-Hud': '1' },
+      body: JSON.stringify({ id: `run:${runId}` }),
+    });
+    ok = res.ok;
+  } catch {
+    ok = false;
+  }
+  row.classList.remove('busy');
+  // A miss is normal: the session may have been closed since it recorded its
+  // tty. Say so briefly rather than failing silently or throwing a dialog.
+  row.classList.add(ok ? 'hit' : 'miss');
+  setTimeout(() => row.classList.remove('hit', 'miss'), 900);
+}
+
+/**
  * The units around wherever the run currently is. A 28-unit run rendered in full
  * is a 28-row list, and three of those fill the column, so the list is windowed
  * on the running unit and the hidden counts are shown at either end rather than
@@ -333,6 +359,16 @@ function runRow(r, now) {
   if (ask) row.append(el('div', 'run-ask', ask + age));
 
   if (r.units.length) row.append(unitList(r.units, now));
+
+  // Clicking anywhere in the row focuses the Terminal tab this run is executing
+  // in. Agents share their parent's terminal, so a sub-row does the same thing.
+  // Only the runId crosses the wire; the server resolves the tty from the run's
+  // own file. A run that recorded no tty is simply not clickable.
+  if (r.tty) {
+    row.dataset.clickable = '';
+    row.title = `Open the terminal running this (${r.tty})`;
+    row.addEventListener('click', () => openRunTerminal(r.runId, row));
+  }
 
   const c = counts(r.units);
   const e = eta(r.units);
