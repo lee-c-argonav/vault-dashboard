@@ -22,7 +22,7 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VAULT="${VAULT_HUD_VAULT:-$HOME/Desktop/lee-vault/lee-main}"
+VAULT="${VAULT_HUD_VAULT:-$HOME/Obsidian/vault}"
 
 # The team and the page URL are machine- and account-specific, so they live in
 # the gitignored .env like every other such value in this repo. The URL in
