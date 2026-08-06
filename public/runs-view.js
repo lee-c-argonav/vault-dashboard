@@ -143,8 +143,13 @@ export function durationOf(x, now) {
     if (!x.started) return { text: 'no start', bad: true, why: 'Running but recorded no start time', state: 'running' };
     const ms = now - Date.parse(x.started);
     if (ms < 0) {
-      return { text: `+${humanMs(-ms)}`, bad: true,
-        why: `Start time is ${humanMs(-ms)} in the future: ${x.started}`, state: 'running' };
+      // NOT a countdown. The recorded start is ahead of the clock, so no elapsed
+      // time can be computed. `+1h8m` read as "starts in 1h8m", which is the
+      // opposite of the truth: this is running now, we just cannot say for how
+      // long. The word says that; the tooltip says why.
+      return { text: 'unknown', bad: true,
+        why: `Running now, but its recorded start is ${humanMs(-ms)} ahead of the clock (${x.started}), so no elapsed time can be computed. The writing session's clock is wrong.`,
+        state: 'running' };
     }
     return { text: humanMs(ms), bad: false, why: '', state: 'running' };
   }
