@@ -215,6 +215,34 @@ export function unitWindow(units) {
   };
 }
 
+/**
+ * What the row says is wrong, and how long it has been wrong.
+ *
+ * A run can be BLOCKED by a failed unit carrying no `blockers[]` entry, so the
+ * fallback names the unit. That fallback lived only in the HUD, which meant the
+ * phone rendered BLOCKED with no reason at all. Shared, because a surface that
+ * synthesised a different reason would be describing a different run.
+ */
+export function askOf(run, now) {
+  const st = runState(run);
+  const source = st === 'needs-input' ? run.needsInput[0]
+    : st === 'blocked' ? run.blockers[0] : null;
+  if (source) {
+    const text = source.question ?? source.what;
+    const ms = source.since ? now - Date.parse(source.since) : null;
+    // A `since` in the future is the same writer bug durationOf reports, and
+    // rendering it as `--` said nothing at all.
+    const age = !Number.isFinite(ms) ? '' : ms < 0 ? ' · not yet' : ` · ${humanMs(ms)}`;
+    return text + age;
+  }
+  if (st !== 'blocked') return '';
+  const failed = run.units.filter((u) => u.state === 'failed');
+  if (!failed.length) return '';
+  return failed.length === 1
+    ? `Unit ${failed[0].id} failed: ${failed[0].label}`
+    : `${failed.length} units failed: ${failed.map((u) => u.id).join(', ')}`;
+}
+
 export function counts(units) {
   return { done: units.filter((u) => u.state === 'done').length, total: units.length };
 }

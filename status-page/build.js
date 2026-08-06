@@ -17,7 +17,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { homedir } from 'node:os';
 import { readRuns } from '../runs.js';
 import {
-  LABEL, runState, stateText, durationOf, unitWindow, expandSet,
+  LABEL, runState, stateText, durationOf, unitWindow, expandSet, askOf, quietMs,
   eta, etaText, elapsedText, humanMs, counts,
 } from '../public/runs-view.js';
 
@@ -33,11 +33,16 @@ const CSS = `
   --bg:#08090A; --panel:#101113; --panel-2:#16181B;
   --rule:#1E2024; --rule-hot:#2A2D33;
   --orange:#FF5D1F; --amber:#F0A202;
-  --bone:#E8E4DC; --dim:#8B8F95; --dimmer:#5A5E64;
+  --bone:#E8E4DC; --dim:#8B8F95; --dimmer:#42454A; --text-3:#8B8F95;
   --mono: ui-monospace,"SF Mono",Menlo,monospace;
   --sans: -apple-system,"Helvetica Neue","Inter",sans-serif;
 }
-/* A real light palette, not an inversion. The HUD's accents fail on white:
+/* The quiet steps are one stop lighter than the HUD's, deliberately: a phone is
+   read in daylight at arm's length, a desktop panel in a controlled room. The
+   HUD's --dim measures 3.85:1 on a card here, below AA at 11px; this is 5.47:1.
+   --dimmer stays a mark tint and is never used for text on either surface.
+
+   A real light palette, not an inversion. The HUD's accents fail on white:
    #FF5D1F is 2.9:1 there and #F0A202 is 1.9:1, so both are darkened until they
    carry the same meaning at the same legibility. */
 @media (prefers-color-scheme: light){
@@ -45,20 +50,20 @@ const CSS = `
     --bg:#F4F2EE; --panel:#FFFFFF; --panel-2:#F0EDE7;
     --rule:#D8D4CC; --rule-hot:#B9B4AA;
     --orange:#C63C08; --amber:#8A5D00;
-    --bone:#14161A; --dim:#4E5258; --dimmer:#74787E;
+    --bone:#14161A; --dim:#4E5258; --dimmer:#B9B4AA; --text-3:#4E5258;
   }
 }
 :root[data-theme="light"]{
   --bg:#F4F2EE; --panel:#FFFFFF; --panel-2:#F0EDE7;
   --rule:#D8D4CC; --rule-hot:#B9B4AA;
   --orange:#C63C08; --amber:#8A5D00;
-  --bone:#14161A; --dim:#4E5258; --dimmer:#74787E;
+  --bone:#14161A; --dim:#4E5258; --dimmer:#B9B4AA; --text-3:#4E5258;
 }
 :root[data-theme="dark"]{
   --bg:#08090A; --panel:#101113; --panel-2:#16181B;
   --rule:#1E2024; --rule-hot:#2A2D33;
   --orange:#FF5D1F; --amber:#F0A202;
-  --bone:#E8E4DC; --dim:#8B8F95; --dimmer:#5A5E64;
+  --bone:#E8E4DC; --dim:#8B8F95; --dimmer:#42454A; --text-3:#8B8F95;
 }
 
 *,*::before,*::after{box-sizing:border-box;border-radius:0}
@@ -70,7 +75,7 @@ body{
 }
 
 .k{font:10px/1 var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--dim);margin:0 0 10px}
-.n{font:54px/.9 var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.04em;
+.n{font:40px/.95 var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.04em;
    color:var(--orange);margin:0 0 26px}
 .n.calm{color:var(--bone)}
 
@@ -82,8 +87,8 @@ body{
      padding:15px 16px;margin-bottom:14px}
 .run.needs-input{border-left-color:var(--orange);background:var(--panel-2)}
 .run.blocked{border-left-color:var(--amber)}
-.run.running{border-left-color:var(--rule-hot)}
-.run.paused,.run.done{border-left-color:var(--dimmer)}
+.run.running{border-left-color:var(--dim)}
+.run.paused,.run.done{border-left-color:var(--rule-hot)}
 
 .hd{display:flex;align-items:baseline;gap:10px;justify-content:space-between}
 h2{font:600 17px/1.35 var(--sans);margin:0;overflow-wrap:anywhere}
@@ -93,6 +98,9 @@ h2{font:600 17px/1.35 var(--sans);margin:0;overflow-wrap:anywhere}
     font:10px/1 var(--mono);letter-spacing:.13em;color:var(--dim);white-space:nowrap}
 .needs-input .st{color:var(--bg);background:var(--orange);border-color:var(--orange)}
 .blocked .st{color:var(--amber);border-color:var(--amber)}
+.nostamp .st{color:var(--amber);border-color:var(--amber);background:none}
+.needs-input.nostamp .st{color:var(--bg);background:var(--orange);border-color:var(--orange);
+  outline:1px solid var(--amber);outline-offset:1px}
 
 .note{font-size:15px;color:var(--bone);margin:11px 0 0;overflow-wrap:anywhere}
 .ask{margin:12px 0 0;padding:11px 12px;background:var(--panel-2);
@@ -101,32 +109,34 @@ h2{font:600 17px/1.35 var(--sans);margin:0;overflow-wrap:anywhere}
 
 /* Units. Same three columns as the HUD so the two surfaces read alike. */
 .units{margin:14px 0 0;border-top:1px solid var(--rule);padding-top:4px}
-.u{display:grid;grid-template-columns:7px 54px minmax(0,1fr) 76px;gap:10px;
+.u{display:grid;grid-template-columns:7px 44px minmax(0,1fr) 62px;gap:8px;
    align-items:baseline;padding:5px 0}
 .dot{width:6px;height:6px;align-self:center;background:var(--rule-hot)}
 .u.done .dot{background:var(--bone)}
 .u.running .dot{background:var(--orange)}
 .u.blocked .dot{background:var(--amber)}
 .u.failed .dot{background:var(--bone);box-shadow:inset 0 0 0 1px var(--orange)}
-.uid{font:11px/1.45 var(--mono);letter-spacing:.06em;color:var(--dimmer);
+.uid{font:11px/1.45 var(--mono);letter-spacing:.06em;color:var(--text-3);
      white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ul{font:14px/1.45 var(--sans);color:var(--dim);overflow-wrap:anywhere}
 .u.done .ul,.u.running .ul{color:var(--bone)}
 .dur{font:11px/1.45 var(--mono);font-variant-numeric:tabular-nums;letter-spacing:.04em;
-     text-align:right;white-space:nowrap;color:var(--dimmer)}
+     text-align:right;white-space:nowrap;color:var(--text-3)}
 .dur.is-done{color:var(--dim)}
 .dur.is-running{color:var(--orange)}
 .dur.is-bad{color:var(--amber)}
-.more{padding:5px 0 5px 81px;font:10px/1.45 var(--mono);letter-spacing:.1em;
-      text-transform:uppercase;color:var(--dimmer)}
+.more{padding:5px 0 5px 67px;font:10px/1.45 var(--mono);letter-spacing:.1em;
+      text-transform:uppercase;color:var(--text-3)}
 
 /* Sub-agents, indented past the label column exactly as on the desktop. */
-.a{display:grid;grid-template-columns:4px minmax(0,1fr) 76px;gap:10px;
-   align-items:baseline;padding:3px 0 3px 81px}
+.a{display:grid;grid-template-columns:4px minmax(0,1fr) 62px;gap:8px;
+   align-items:baseline;padding:3px 0 3px 67px}
 .a .dot{width:4px;height:4px;background:var(--rule-hot)}
 .a.done .dot{background:var(--bone)}
 .a.running .dot{background:var(--orange)}
-.al{font:13px/1.45 var(--sans);color:var(--dimmer);overflow-wrap:anywhere}
+.a.blocked .dot{background:var(--amber)}
+.a.failed .dot{background:var(--bone);box-shadow:inset 0 0 0 1px var(--orange)}
+.al{font:13px/1.45 var(--sans);color:var(--text-3);overflow-wrap:anywhere}
 .a.done .al,.a.running .al{color:var(--dim)}
 
 .foot{display:flex;justify-content:space-between;gap:12px;margin:13px 0 0;
@@ -168,9 +178,7 @@ function unitRows(units, now) {
 
 function runCard(r, now, expanded) {
   const st = runState(r);
-  const source = st === 'needs-input' ? r.needsInput[0] : st === 'blocked' ? r.blockers[0] : null;
-  const ask = source ? (source.question ?? source.what) : '';
-  const age = source?.since ? ` · ${humanMs(now - Date.parse(source.since))}` : '';
+  const ask = askOf(r, now);
   const c = counts(r.units);
   const e = eta(r.units);
   const elapsed = elapsedText(r, now);
@@ -178,7 +186,7 @@ function runCard(r, now, expanded) {
     // Same rule as the desktop: at scale most runs collapse to one line, and
     // the surfaces must agree about which ones. expandSet decides for both.
     return `
-<article class="run collapsed ${esc(st)}">
+<article class="run collapsed ${esc(st)}${quietMs(r, now) === null ? ' nostamp' : ''}">
   <div class="hd">
     <h2>${esc(r.goal)}</h2>
     <span class="mini">${c.done}/${c.total}</span>
@@ -187,14 +195,14 @@ function runCard(r, now, expanded) {
 </article>`;
   }
   return `
-<article class="run ${esc(st)}">
+<article class="run ${esc(st)}${quietMs(r, now) === null ? ' nostamp' : ''}">
   <div class="hd">
     <h2>${esc(r.goal)}</h2>
     <span class="mach">${esc(r.machine)}</span>
   </div>
   <span class="st">${esc(stateText(r, now))}</span>
   ${r.note ? `<p class="note">${esc(r.note)}</p>` : ''}
-  ${ask ? `<p class="ask">${esc(ask + age)}</p>` : ''}
+  ${ask ? `<p class="ask">${esc(ask)}</p>` : ''}
   ${r.units.length ? `<div class="units">${unitRows(r.units, now)}</div>` : ''}
   <div class="foot">
     <span>${c.done} of ${c.total} done${elapsed ? ` · ${elapsed}` : ''}</span>
@@ -227,7 +235,14 @@ export async function build(now = Date.now()) {
             .map((r) => runCard(r, now, expand.has(r.runId))).join('')).join('')
     : '<p class="empty">No run is publishing status</p>';
 
-  const html = `<title>Run status</title>
+  const html = `<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#08090A" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#F4F2EE" media="(prefers-color-scheme: light)">
+<title>Run status</title>
 <style>${CSS}</style>
 <p class="k">${needing ? 'Needs you' : 'Active runs'}</p>
 <p class="n${needing ? '' : ' calm'}">${String(needing || runs.length).padStart(2, '0')}</p>

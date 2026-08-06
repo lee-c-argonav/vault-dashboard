@@ -11,7 +11,8 @@
   --amber: #F0A202;
   --bone: #E8E4DC;
   --dim: #6E7175;
-  --dimmer: #42454A;
+  --dimmer: #42454A;   /* marks and rules only, never text */
+  --text-3: #6E7175;   /* the quietest colour any text may use: 3.63:1 on --panel-2 */
 
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
   --sans: -apple-system, "Helvetica Neue", "Inter", sans-serif;
@@ -483,7 +484,7 @@ body {
 .repo-tally {
   font: 10px/1 var(--mono);
   letter-spacing: .1em;
-  color: var(--dimmer);
+  color: var(--text-3);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -513,7 +514,7 @@ body {
    contribution is the whole string, so it refuses to shrink. */
 .run-goal {
   min-width: 0;
-  font: 15px/1.4 var(--sans);
+  font: 600 15px/1.4 var(--sans);
   color: var(--bone);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
@@ -545,6 +546,15 @@ body {
    colour left amber text on it at 1.43:1 — unreadable on the one row that
    matters most. */
 .run.is-nostamp .run-state { color: var(--amber); border-color: var(--amber); background: none; }
+/* needs-input keeps its fill. A broken stamp is a flag, not a state, and
+   overwriting the one signal that matters with a quieter one loses the run. */
+.run.is-needs-input.is-nostamp .run-state {
+  color: var(--bg);
+  background: var(--orange);
+  border-color: var(--orange);
+  outline: 1px solid var(--amber);
+  outline-offset: 1px;
+}
 
 .run-note {
   margin-top: 6px;
@@ -587,7 +597,7 @@ body {
 .run-u-id {
   font: 11px/1.45 var(--mono);
   letter-spacing: .06em;
-  color: var(--dimmer);
+  color: var(--text-3);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .run-u-label {
@@ -622,7 +632,7 @@ body {
 
 .run-a-label {
   font: 12px/1.45 var(--sans);
-  color: var(--dimmer);
+  color: var(--text-3);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .run-a.is-running .run-a-label, .run-a.is-done .run-a-label { color: var(--dim); }
@@ -637,7 +647,7 @@ body {
   letter-spacing: .04em;
   text-align: right;
   white-space: nowrap;
-  color: var(--dimmer);
+  color: var(--text-3);
 }
 .dur.is-done    { color: var(--dim); }
 .dur.is-running { color: var(--orange); }
@@ -658,7 +668,7 @@ body {
   font: 10px/1.4 var(--mono);
   letter-spacing: .1em;
   text-transform: uppercase;
-  color: var(--dimmer);
+  color: var(--text-3);
 }
 
 .run-foot {
@@ -722,8 +732,6 @@ body {
   inset: 0;
   z-index: 60;
   background: var(--bg);
-}
-
 }
 
 .empty-row {

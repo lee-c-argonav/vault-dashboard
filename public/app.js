@@ -6,7 +6,7 @@
 // Both import it so the two surfaces cannot disagree about whether a run is
 // waiting on you. Liveness lives here, not in State: State is diffed by
 // stringify below, so a clock-derived field would look changed on every push.
-import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, counts }
+import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, askOf, counts }
   from './runs-view.js';
 
 const STATE_SOURCES = ['/api/state'];
@@ -333,22 +333,8 @@ function runRow(r, now, expanded = true) {
 
   // The ask is rendered in full rather than behind a click. A question you have
   // to open is a question that waits another hour.
-  const source = st === 'needs-input' ? r.needsInput[0]
-    : st === 'blocked' ? r.blockers[0] : null;
-  let ask = source ? (source.question ?? source.what) : '';
-  let age = source?.since ? ` · ${humanMs(now - Date.parse(source.since))}` : '';
-  // A run can be BLOCKED by a failed unit with no blockers[] entry. Without this
-  // the row says BLOCKED and gives no reason at all.
-  if (!ask && st === 'blocked') {
-    const failed = r.units.filter((u) => u.state === 'failed');
-    if (failed.length) {
-      ask = failed.length === 1
-        ? `Unit ${failed[0].id} failed: ${failed[0].label}`
-        : `${failed.length} units failed: ${failed.map((u) => u.id).join(', ')}`;
-      age = '';
-    }
-  }
-  if (ask) row.append(el('div', 'run-ask', ask + age));
+  const ask = askOf(r, now);
+  if (ask) row.append(el('div', 'run-ask', ask));
 
   if (r.units.length) row.append(unitList(r.units, now));
 
