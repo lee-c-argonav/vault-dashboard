@@ -21,3 +21,4 @@ out/
 # Run-status files belong in the vault, never here. A misconfigured agent
 # writing a relative 15-Runs/ path would otherwise make them committable.
 15-Runs/
+status-page/status.html

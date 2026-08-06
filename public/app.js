@@ -6,7 +6,7 @@
 // Both import it so the two surfaces cannot disagree about whether a run is
 // waiting on you. Liveness lives here, not in State: State is diffed by
 // stringify below, so a clock-derived field would look changed on every push.
-import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, counts }
+import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, counts }
   from './runs-view.js';
 
 const STATE_SOURCES = ['/api/state'];
@@ -206,10 +206,6 @@ function renderHero(state) {
 
 // ── runs ─────────────────────────────────────────────────────────────────────
 
-const UNIT_WINDOW = 5;
-// Always show the final units, so a run's end is visible however long it is.
-const UNIT_TAIL = 2;
-
 /**
  * Ask the server to focus the Terminal tab this run is executing in. Sends only
  * the run id; the server resolves the tty from the run's own file and validates
@@ -248,20 +244,8 @@ async function openRunTerminal(runId, row) {
  */
 function unitList(units, now) {
   const wrap = el('div', 'run-units');
-  let pivot = units.findIndex((u) => u.state === 'failed');
-  if (pivot === -1) pivot = units.findIndex((u) => u.state === 'running');
-  if (pivot === -1) {
-    const lastDone = units.map((u) => u.state).lastIndexOf('done');
-    pivot = lastDone === -1 ? 0 : lastDone;
-  }
-  let start = Math.max(0, Math.min(pivot - Math.floor(UNIT_WINDOW / 2), units.length - UNIT_WINDOW));
-  start = Math.max(0, start);
-  const end = Math.min(units.length, start + UNIT_WINDOW);
-  // The last units always render. Without them you can see where a run is but
-  // never where it ends, and "+10 later" is not an answer to how much is left.
-  const tailStart = Math.max(end, units.length - UNIT_TAIL);
+  const w = unitWindow(units);
 
-  if (start > 0) wrap.append(el('div', 'run-u-more', `+${start} earlier`));
   const renderUnit = (u) => {
     const line = el('div', `run-u${u.state === 'todo' ? '' : ` is-${u.state}`}`);
     line.append(el('i', 'run-u-dot'));
@@ -311,11 +295,10 @@ function unitList(units, now) {
       }
     }
   };
-  for (const u of units.slice(start, end)) renderUnit(u);
-
-  const gap = tailStart - end;
-  if (gap > 0) wrap.append(el('div', 'run-u-more', `+${gap} later`));
-  for (const u of units.slice(tailStart)) renderUnit(u);
+  if (w.earlier > 0) wrap.append(el('div', 'run-u-more', `+${w.earlier} earlier`));
+  for (const u of w.visible) renderUnit(u);
+  if (w.gap > 0) wrap.append(el('div', 'run-u-more', `+${w.gap} later`));
+  for (const u of w.tail) renderUnit(u);
   return wrap;
 }
 

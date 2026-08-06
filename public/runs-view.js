@@ -153,6 +153,38 @@ export function durationOf(x, now) {
   return { text: '', bad: false, why: '', state: x.state };
 }
 
+export const UNIT_WINDOW = 5;
+export const UNIT_TAIL = 2;
+
+/**
+ * Which units to show, for any surface. A long run cannot render every unit, so
+ * this returns a window around wherever the run currently is plus the final
+ * units, with the hidden counts at either end.
+ *
+ * Shared rather than duplicated: the HUD and the phone page must agree about
+ * what a run's progress looks like, and two copies of this arithmetic would not.
+ */
+export function unitWindow(units) {
+  // A failure outranks a running unit. The row is already labelled BLOCKED
+  // because of it, so a window pivoted elsewhere hides its own stated reason.
+  let pivot = units.findIndex((u) => u.state === 'failed');
+  if (pivot === -1) pivot = units.findIndex((u) => u.state === 'running');
+  if (pivot === -1) {
+    const lastDone = units.map((u) => u.state).lastIndexOf('done');
+    pivot = lastDone === -1 ? 0 : lastDone;
+  }
+  let start = Math.max(0, Math.min(pivot - Math.floor(UNIT_WINDOW / 2), units.length - UNIT_WINDOW));
+  start = Math.max(0, start);
+  const end = Math.min(units.length, start + UNIT_WINDOW);
+  const tailStart = Math.max(end, units.length - UNIT_TAIL);
+  return {
+    earlier: start,
+    visible: units.slice(start, end),
+    gap: tailStart - end,
+    tail: units.slice(tailStart),
+  };
+}
+
 export function counts(units) {
   return { done: units.filter((u) => u.state === 'done').length, total: units.length };
 }
