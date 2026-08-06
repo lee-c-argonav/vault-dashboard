@@ -457,27 +457,39 @@ body {
 
 /* ── runs ───────────────────────────────────────────────────────────────── */
 
+/* Runs group by repo. The header is suppressed when the whole board is one
+   repo, because one header over one group is chrome. */
+.repo-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px 8px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--rule);
+}
+.repo-name { font: 10px/1 var(--mono); letter-spacing: .18em; text-transform: uppercase; color: var(--bone); }
+.repo-tally {
+  font: 10px/1 var(--mono);
+  letter-spacing: .1em;
+  color: var(--dimmer);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .run {
-  display: grid;
-  grid-template-columns: 3px minmax(0, 1fr) auto;
-  gap: 0 10px;
-  align-items: start;
-  padding: 8px 16px;
+  padding: 12px 16px 14px;
   border-bottom: 1px solid var(--rule);
 }
 .run:last-child { border-bottom: 0; }
+.run.is-needs-input { background: var(--panel-2); }
 
-.run-rail { align-self: stretch; background: var(--dimmer); }
-.run-main { min-width: 0; }
-
-.run-top { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.run-top { display: flex; align-items: baseline; gap: 9px; }
 
 /* min-width: 0 or the ellipsis never fires: a nowrap flex item's min-content
-   contribution is the whole string, so it refuses to shrink. .ro-text does the
-   same. */
+   contribution is the whole string, so it refuses to shrink. */
 .run-goal {
   min-width: 0;
-  font: 13px/1.5 var(--sans);
+  font: 14px/1.4 var(--sans);
   color: var(--bone);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
@@ -490,98 +502,107 @@ body {
   color: var(--dim);
 }
 
-.run-note {
-  margin-top: 3px;
-  font: 12px/1.4 var(--sans);
-  color: var(--dim);
-  overflow-wrap: anywhere;
-  display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden;
-}
-
-/* The ask is the reason the panel exists, so it gets two lines rather than one.
-   .dec-text clamps the same way. */
-.run-ask {
-  margin-top: 5px;
-  font: 12px/1.4 var(--sans);
-  color: var(--orange);
-  overflow-wrap: anywhere;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-}
-.run.is-blocked .run-ask { color: var(--amber); }
-
-.run-right { flex: none; text-align: right; }
-
-/* A filled block, not coloured text. .wglyph reserves inversion for the warning
-   strip, and this is the panel's one alarm. */
+/* An outlined chip by default, inverted only when it needs Lee. .wglyph reserves
+   inversion for the warning strip; this is the panel's one alarm and it is small
+   on purpose. Size carries the signal, not a field of colour. */
 .run-state {
-  display: inline-block;
+  margin-left: auto;
+  flex: none;
   padding: 3px 5px;
-  border: 1px solid transparent;
+  border: 1px solid var(--rule-hot);
   font: 9px/1 var(--mono);
   letter-spacing: .14em;
   text-transform: uppercase;
   color: var(--dim);
   white-space: nowrap;
 }
-
-.run-eta {
-  margin-top: 4px;
-  font: 10px/1 var(--mono);
-  font-variant-numeric: tabular-nums;
-  color: var(--dim);
-}
-
-/* Fixed-width ticks in a hairline well, like .load-strip. Flexed blocks
-   degenerate into gap noise once a run has many units. */
-.run-bar {
-  margin-top: 7px;
-  display: flex; gap: 2px;
-  height: 7px; padding: 1px;
-  /* max-content so the well hugs its ticks. Left to stretch it reads as a
-     half-empty progress bar rather than as one block per unit. */
-  width: max-content;
-  /* 100% or the bar overflows .run-main on a narrow window. */
-  max-width: min(260px, 100%);
-  border: 1px solid var(--rule-hot);
-  overflow: hidden;
-}
-.run-bar:empty { display: none; }
-/* Shrink rather than clip. At a fixed 6px the well silently drops every unit
-   past the 32nd, and a bar that hides units is worse than one with thin ticks. */
-.run-blk { flex: 1 1 6px; min-width: 2px; max-width: 6px; background: var(--rule); }
-.run-blk.is-done    { background: var(--bone); }
-.run-blk.is-running { background: var(--orange); }
-.run-blk.is-blocked { background: var(--amber); }
-/* Not orange: that is the running colour, and a run is promoted to BLOCKED by a
-   failed unit, so sharing it leaves no way to find which unit failed. */
-.run-blk.is-failed  { background: var(--bone); box-shadow: inset 0 0 0 1px var(--orange); }
-
-/* state variants */
-.run.is-needs-input               { background: var(--panel-2); }
-.run.is-needs-input .run-rail     { background: var(--orange); }
-.run.is-needs-input .run-state    { color: var(--bg); background: var(--orange); }
-.run.is-blocked .run-rail         { background: var(--amber); }
-.run.is-blocked .run-state        { color: var(--amber); border-color: var(--amber); }
-.run.is-running .run-rail         { background: var(--orange-dim); }
-.run.is-running .run-state        { color: var(--bone); border-color: var(--rule-hot); }
-.run.is-paused .run-rail          { background: var(--dim); }
-.run.is-done .run-rail            { background: var(--dimmer); }
-.run.is-done .run-goal            { color: var(--dim); }
-/* Quiet dims a run nobody is waiting on. It must NOT dim one that needs you:
-   silence on an unanswered question is a reason to look harder, not less. */
-/* .is-nostamp is excluded too: a malformed timestamp is a writer bug, and one
-   bad field must not make a live run look dead. */
-.run.is-quiet:not(.is-needs-input):not(.is-blocked):not(.is-nostamp) .run-goal  { color: var(--dim); }
-.run.is-quiet:not(.is-needs-input):not(.is-blocked):not(.is-nostamp) .run-state { color: var(--dimmer); }
+.run.is-needs-input .run-state { color: var(--bg); background: var(--orange); border-color: var(--orange); }
+.run.is-blocked .run-state { color: var(--amber); border-color: var(--amber); }
 .run.is-nostamp .run-state { color: var(--amber); border-color: var(--amber); }
 
-/* Escalate to the panel. A 3px sliver is the same width as the decorative .lab
-   ticks and reads as chrome; a full-width outline reads across the room. */
-.runs.hot { outline: 1px solid var(--orange); outline-offset: -1px; }
+.run-note {
+  margin-top: 5px;
+  font: 12px/1.45 var(--sans);
+  color: var(--dim);
+  overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+.run-ask {
+  margin-top: 7px;
+  font: 12px/1.45 var(--sans);
+  color: var(--orange);
+  overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.run.is-blocked .run-ask { color: var(--amber); }
+
+/* The unit list. This is the answer to "what is done and what is not", in words
+   rather than as anonymous ticks. Windowed in app.js: a 28-unit run would
+   otherwise be a 28-row list and three of those fill the column. */
+.run-units { margin-top: 11px; }
+
+.run-u {
+  display: grid;
+  grid-template-columns: 8px 36px minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: baseline;
+  padding: 3px 0;
+}
+.run-u-dot { width: 6px; height: 6px; align-self: center; background: var(--rule-hot); }
+.run-u.is-done .run-u-dot { background: var(--bone); }
+.run-u.is-running .run-u-dot { background: var(--orange); }
+.run-u.is-blocked .run-u-dot { background: var(--amber); }
+/* Not orange: that is the running colour, and a failed unit must be findable. */
+.run-u.is-failed .run-u-dot { background: var(--bone); box-shadow: inset 0 0 0 1px var(--orange); }
+
+.run-u-id { font: 11px/1.4 var(--mono); letter-spacing: .06em; color: var(--dimmer); }
+.run-u-label {
+  font: 12px/1.4 var(--sans);
+  color: var(--dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.run-u.is-done .run-u-label, .run-u.is-running .run-u-label { color: var(--bone); }
+.run-u-t {
+  font: 11px/1.4 var(--mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .04em;
+  color: var(--dimmer);
+  white-space: nowrap;
+}
+.run-u.is-running .run-u-t { color: var(--orange); }
+
+/* Overflow markers at either end of the window, so a hidden unit is visible as
+   a count rather than silently absent. */
+.run-u-more {
+  padding: 3px 0 3px 53px;
+  font: 10px/1.4 var(--mono);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--dimmer);
+}
+
+.run-foot {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--rule);
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font: 10px/1 var(--mono);
+  letter-spacing: .1em;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Quiet dims a run nobody is waiting on. It must NOT dim one that needs you:
+   silence on an unanswered question is a reason to look harder, not less. */
+.run.is-quiet:not(.is-needs-input):not(.is-blocked):not(.is-nostamp) .run-goal { color: var(--dim); }
+.run.is-done .run-goal { color: var(--dim); }
+
+/* The panel tick goes dim when there is nothing to say, exactly as the dark
+   cockpit rule wants: unlit is the normal state. */
 .runs:not(.hot) .lab::before { background: var(--dimmer); }
-/* .panel.flash is the same orange, so a flash on an already-hot panel is
-   invisible. Bone reads against it and against the panel. */
-.runs.hot.flash { outline-color: var(--bone); }
 
 /* ── lattice ────────────────────────────────────────────────────────────── */
 

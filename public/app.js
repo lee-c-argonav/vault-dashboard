@@ -206,24 +206,73 @@ function renderHero(state) {
 
 // ── runs ─────────────────────────────────────────────────────────────────────
 
+const UNIT_WINDOW = 6;
+
+/**
+ * The units around wherever the run currently is. A 28-unit run rendered in full
+ * is a 28-row list, and three of those fill the column, so the list is windowed
+ * on the running unit and the hidden counts are shown at either end rather than
+ * dropped silently.
+ */
+function unitList(units, now) {
+  const wrap = el('div', 'run-units');
+  let pivot = units.findIndex((u) => u.state === 'running' || u.state === 'failed');
+  if (pivot === -1) {
+    const lastDone = units.map((u) => u.state).lastIndexOf('done');
+    pivot = lastDone === -1 ? 0 : lastDone;
+  }
+  let start = Math.max(0, Math.min(pivot - Math.floor(UNIT_WINDOW / 2), units.length - UNIT_WINDOW));
+  start = Math.max(0, start);
+  const end = Math.min(units.length, start + UNIT_WINDOW);
+
+  if (start > 0) wrap.append(el('div', 'run-u-more', `+${start} earlier`));
+  for (const u of units.slice(start, end)) {
+    const line = el('div', `run-u${u.state === 'todo' ? '' : ` is-${u.state}`}`);
+    line.append(el('i', 'run-u-dot'));
+    line.append(el('span', 'run-u-id', u.id));
+    const label = el('span', 'run-u-label', u.label || '—');
+    label.title = `${u.id} ${u.label} — ${u.state}`;
+    line.append(label);
+
+    // humanMs returns '--' for anything it cannot compute, and "running --" reads
+    // as a broken field. Fall back to the bare word rather than showing a dash.
+    let t = '';
+    if (u.state === 'done' && u.started && u.ended) {
+      t = humanMs(Date.parse(u.ended) - Date.parse(u.started));
+    } else if (u.state === 'running') {
+      const since = u.started ? humanMs(now - Date.parse(u.started)) : '--';
+      t = since === '--' ? 'running' : `running ${since}`;
+    } else if (u.state === 'failed') {
+      t = 'failed';
+    } else if (u.state === 'blocked') {
+      t = 'blocked';
+    }
+    line.append(el('span', 'run-u-t', t));
+    wrap.append(line);
+  }
+  if (end < units.length) wrap.append(el('div', 'run-u-more', `+${units.length - end} later`));
+  return wrap;
+}
+
 function runRow(r, now) {
   const st = runState(r);
   const quiet = isQuiet(r, now);
   const nostamp = quietMs(r, now) === null;
   const row = el('div', `run is-${st}${quiet ? ' is-quiet' : ''}${nostamp ? ' is-nostamp' : ''}`);
-  row.append(el('span', 'run-rail'));
 
-  const main = el('div', 'run-main');
   const top = el('div', 'run-top');
   const goal = el('span', 'run-goal', r.goal);
   goal.title = r.goal;
-  top.append(goal, el('span', 'run-proj', [r.project, r.machine].filter(Boolean).join(' · ')));
-  main.append(top);
+  top.append(goal, el('span', 'run-proj', r.machine || ''));
+  // stateText, not a hand-built string. build.js renders the same label and the
+  // shared module exists so the two surfaces cannot drift apart on it.
+  top.append(el('span', 'run-state', stateText(r, now)));
+  row.append(top);
 
   if (r.note) {
     const note = el('div', 'run-note', r.note);
     note.title = r.note;
-    main.append(note);
+    row.append(note);
   }
 
   // The ask is rendered in full rather than behind a click. A question you have
@@ -243,27 +292,16 @@ function runRow(r, now) {
       age = '';
     }
   }
-  if (ask) main.append(el('div', 'run-ask', ask + age));
+  if (ask) row.append(el('div', 'run-ask', ask + age));
 
-  if (r.units.length) {
-    const bar = el('div', 'run-bar');
-    for (const u of r.units) {
-      const blk = el('i', `run-blk${u.state === 'todo' ? '' : ` is-${u.state}`}`);
-      blk.title = `${u.id} ${u.label} — ${u.state}`;
-      bar.append(blk);
-    }
-    main.append(bar);
-  }
-  row.append(main);
+  if (r.units.length) row.append(unitList(r.units, now));
 
-  const right = el('div', 'run-right');
-  // stateText, not a hand-built string. build.js renders the same label and the
-  // shared module exists so the two surfaces cannot drift apart on it.
-  right.append(el('div', 'run-state', stateText(r, now)));
   const c = counts(r.units);
   const e = eta(r.units);
-  right.append(el('div', 'run-eta', `${c.done}/${c.total}${e ? ` · ${etaText(e)}` : ''}`));
-  row.append(right);
+  const foot = el('div', 'run-foot');
+  foot.append(el('span', null, `${c.done} of ${c.total} done`));
+  foot.append(el('span', null, e ? etaText(e) : ''));
+  row.append(foot);
   return row;
 }
 
@@ -284,9 +322,47 @@ function renderRuns(runs) {
   const sig = runs.map((r) => rowSignature(r, now)).join('\n');
   if (sig !== runsSig) {
     runsSig = sig;
-    fill('runs-list', runs.map((r) => runRow(r, now)), 'NO RUN IS PUBLISHING STATUS');
+    fill('runs-list', groupedRows(runs, now), 'NO RUN IS PUBLISHING STATUS');
   }
   flashIfChanged($('p-runs'), runs);
+}
+
+// Rank a repo by the worst thing inside it, so the group holding the run that
+// needs Lee sorts first. Grouping otherwise buries the urgent row at an
+// unpredictable depth, which is the one thing this panel cannot afford.
+const URGENCY = { 'needs-input': 0, blocked: 1, running: 2, paused: 3, done: 4 };
+
+function groupedRows(runs, now) {
+  const byRepo = new Map();
+  for (const r of runs) {
+    const key = r.project || '—';
+    if (!byRepo.has(key)) byRepo.set(key, []);
+    byRepo.get(key).push(r);
+  }
+  const worst = (list) => Math.min(...list.map((r) => URGENCY[runState(r)] ?? 9));
+  const groups = [...byRepo.entries()].sort(
+    (a, b) => worst(a[1]) - worst(b[1]) || a[0].localeCompare(b[0]),
+  );
+
+  const rows = [];
+  for (const [repo, list] of groups) {
+    // One header over one group is chrome, so it only appears when grouping is
+    // doing work.
+    if (groups.length > 1) {
+      const head = el('div', 'repo-head');
+      head.append(el('span', 'repo-name', repo));
+      head.append(el('span', 'rule-fill'));
+      const needing = list.filter((r) => runState(r) === 'needs-input').length;
+      head.append(el('span', 'repo-tally',
+        `${pad2(list.length)} ${list.length === 1 ? 'RUN' : 'RUNS'}` +
+        (needing ? ` · ${pad2(needing)} NEEDS YOU` : '')));
+      rows.push(head);
+    }
+    for (const r of list.sort((a, b) => (URGENCY[runState(a)] ?? 9) - (URGENCY[runState(b)] ?? 9))) {
+      rows.push(runRow(r, now));
+    }
+  }
+  return rows;
 }
 
 // ── warnings + footer ────────────────────────────────────────────────────────
