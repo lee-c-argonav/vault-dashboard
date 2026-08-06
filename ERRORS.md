@@ -39,3 +39,23 @@ found a real exposure that was already on the public remote.
 **Remember:** a control that only ever reports success is indistinguishable from one
 that is not running; the only way to tell them apart is to plant something and watch
 it fail.
+
+## 2026-08-06 — keeping two rendering surfaces consistent
+
+**What didn't work:** hand-copying the derivation and the CSS from `public/app.js`
+into `status-page/build.js`. They drifted three times in one session, and each
+drift was user-visible: the phone lost the failed-unit explanation so a run read
+BLOCKED with no reason; a blocked sub-agent painted the same pixel as a
+not-started one; a broken timestamp rendered in the running colour because an
+amber rule tied on specificity and lost on source order. A review measured 80
+divergent declarations across 32 selectors that were meant to be identical.
+
+**What did:** one shared module, `public/runs-view.js`, holding every derivation
+both surfaces call — `runState`, `durationOf`, `askOf`, `unitWindow`,
+`expandSet`, `eta`. The renderers only draw. The one component that was unified
+first, the duration cell, had zero divergences; the ones copied by hand had all
+80.
+
+**Remember:** two copies kept in step by review is not a design, it is a
+schedule of future bugs. Share the derivation, or accept that the surfaces will
+disagree and that the disagreement will reach the user before it reaches you.
