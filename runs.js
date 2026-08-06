@@ -21,6 +21,17 @@ function normaliseUnit(u) {
     state: UNIT_STATES.has(u.state) ? u.state : 'todo',
     started: isoOrNull(u.started),
     ended: isoOrNull(u.ended),
+    // Subagents belong to the unit that fanned them out, not to the run. An
+    // agent with no label is dropped: an unnamed row conveys nothing and would
+    // still occupy the space of a named one.
+    agents: (Array.isArray(u.agents) ? u.agents : [])
+      .filter((a) => isObj(a) && typeof a.label === 'string' && a.label)
+      .map((a) => ({
+        label: a.label,
+        state: UNIT_STATES.has(a.state) ? a.state : 'running',
+        started: isoOrNull(a.started),
+        ended: isoOrNull(a.ended),
+      })),
   };
 }
 

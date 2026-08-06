@@ -250,8 +250,44 @@ function unitList(units, now) {
     } else if (u.state === 'blocked') {
       t = 'blocked';
     }
+    // A cluster on every unit that fanned out, so you can see that it did
+    // without the agent names costing a row each.
+    if (u.agents.length) {
+      const cluster = el('span', 'run-u-agents');
+      for (const a of u.agents) {
+        const dot = el('i', `run-a-dot${a.state === 'todo' ? '' : ` is-${a.state}`}`);
+        dot.title = `${a.label} — ${a.state}`;
+        cluster.append(dot);
+      }
+      cluster.title =
+        `${u.agents.filter((a) => a.state === 'done').length} of ${u.agents.length} agents done`;
+      line.append(cluster);
+    }
     line.append(el('span', 'run-u-t', t));
     wrap.append(line);
+
+    // Names only under the unit actually running, which is at most one or two.
+    // Every unit's agents at once would swamp a list built to be readable.
+    if (u.state === 'running' && u.agents.length) {
+      for (const a of u.agents) {
+        const sub = el('div', `run-a${a.state === 'todo' ? '' : ` is-${a.state}`}`);
+        sub.append(el('i', 'run-a-dot'));
+        const alabel = el('span', 'run-a-label', a.label);
+        alabel.title = a.label;
+        sub.append(alabel);
+        let at = '';
+        if (a.state === 'done' && a.started && a.ended) {
+          at = humanMs(Date.parse(a.ended) - Date.parse(a.started));
+        } else if (a.state === 'running') {
+          const since = a.started ? humanMs(now - Date.parse(a.started)) : '--';
+          at = since === '--' ? 'running' : `running ${since}`;
+        } else if (a.state !== 'todo') {
+          at = a.state;
+        }
+        sub.append(el('span', 'run-a-t', at));
+        wrap.append(sub);
+      }
+    }
   }
   if (end < units.length) wrap.append(el('div', 'run-u-more', `+${units.length - end} later`));
   return wrap;
