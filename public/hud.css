@@ -19,7 +19,6 @@
   --head-h: 74px;
   --vit-h: 27px;
   --band-h: 118px;
-  --bottom-h: 150px;
   --foot-h: 30px;
 }
 
@@ -38,7 +37,7 @@ body {
      warning, a long vault path) sizes the page column past the viewport and
      silently amputates the right edge of every row, with no scrollbar. */
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: var(--head-h) var(--vit-h) var(--band-h) 1fr var(--bottom-h) auto var(--foot-h);
+  grid-template-rows: var(--head-h) var(--vit-h) var(--band-h) 1fr auto var(--foot-h);
   gap: 1px;
   -webkit-font-smoothing: antialiased;
 }
@@ -446,26 +445,15 @@ body {
 
 /* ── main split ─────────────────────────────────────────────────────────── */
 
-.main, .bottom {
+/* Two panels, full height, nothing nested. The todos/due column, the decisions
+   panel and the whole bottom row came out 2026-08-06 at Lee's ask, so main is
+   simply runs beside the lattice and both get the entire row. */
+.main {
   display: grid;
   grid-template-columns: 56fr 44fr;
   gap: 1px;
   min-height: 0;
 }
-
-.rcol { display: grid; grid-template-rows: 1fr 196px; gap: 1px; min-height: 0; }
-
-/* Left column of .main, mirroring .rcol. The runs panel takes the height, the
-   due strip takes what it needs. This replaced the todos panel rather than
-   claiming a new body row, so grid-template-rows above is untouched and the
-   lattice keeps its space. */
-.lcol { display: grid; grid-template-rows: 1fr auto; gap: 1px; min-height: 0; }
-
-/* A flat cap takes 61% of the column on a 620px-tall window and leaves the runs
-   list one row. .main is 100vh - 405px, so cap the strip at a fraction of what
-   the column actually has. */
-.due { max-height: min(132px, calc(0.4 * (100vh - 405px))); }
-.due[hidden] { display: none; }
 
 /* ── runs ───────────────────────────────────────────────────────────────── */
 
@@ -587,68 +575,6 @@ body {
    invisible. Bone reads against it and against the panel. */
 .runs.hot.flash { outline-color: var(--bone); }
 
-/* ── todos ──────────────────────────────────────────────────────────────── */
-
-
-/* Rows are separated by air, not by a rule. A hairline under every row builds a
-   wall you have to read through; spacing lets the group headers do the dividing.
-   The text column is capped at a readable measure and the meta sits in a fixed
-   column after it, so the meta stays aligned down the list however wide the
-   window gets. */
-.todo {
-  display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) auto;
-  gap: 16px;
-  align-items: baseline;
-  padding: 8px 16px;
-  cursor: pointer;
-}
-.todo:hover { background: var(--panel-2); }
-.todo.is-done { opacity: .4; }
-
-.box {
-  width: 9px; height: 9px;
-  border: 1px solid var(--dimmer);
-  justify-self: center;
-  align-self: center;
-}
-.box.on { background: var(--dimmer); }
-.box.hot { border-color: var(--orange); }
-
-.ttext {
-  font: 13px/1.5 var(--sans);
-  color: var(--bone);
-  overflow-wrap: anywhere;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.ttext code { font: 11px/1 var(--mono); color: var(--dim); background: var(--bg); padding: 1px 3px; }
-.ttext strong { font-weight: 600; color: var(--bone); }
-.ttext em { font-style: italic; color: var(--dim); }
-.is-done .ttext { text-decoration: line-through; text-decoration-color: var(--dimmer); }
-
-a.wl { color: var(--dim); text-decoration: none; border-bottom: 1px solid var(--rule-hot); }
-a.wl:hover { color: var(--orange); border-bottom-color: var(--orange); }
-
-.tmeta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  font: 9px/1 var(--mono);
-  letter-spacing: .1em;
-  color: var(--dimmer);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.chip { border: 1px solid var(--rule-hot); padding: 2px 4px; color: var(--dim); }
-.chip.due-today, .chip.due-overdue { border-color: var(--orange); color: var(--orange); }
-.chip.age { border-color: var(--orange-dim); color: var(--orange-dim); }
-.chip.sched { border-style: dashed; }
-/* Project attribution in the time sections, where the header no longer names one. */
-.chip.proj { color: var(--bone); border-color: var(--rule); }
-
 /* ── lattice ────────────────────────────────────────────────────────────── */
 
 .field { position: relative; cursor: crosshair; contain: paint; }
@@ -680,112 +606,6 @@ a.wl:hover { color: var(--orange); border-bottom-color: var(--orange); }
   background: var(--bg);
 }
 
-/* ── decisions ──────────────────────────────────────────────────────────── */
-
-.dec {
-  display: grid;
-  grid-template-columns: 40px 1fr;
-  gap: 10px;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--rule);
-  cursor: pointer;
-}
-.dec:hover { background: var(--panel-2); }
-
-.dec-date {
-  font: 9px/1.6 var(--mono);
-  letter-spacing: .06em;
-  color: var(--orange-dim);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.dec-text {
-  font: 12px/1.4 var(--sans);
-  color: var(--dim);
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.dec-text code { font: 10.5px/1 var(--mono); color: var(--bone); }
-.dec-text strong { color: var(--bone); font-weight: 600; }
-
-.dec-src {
-  margin-top: 4px;
-  font: 9px/1 var(--mono);
-  letter-spacing: .12em;
-  color: var(--dimmer);
-}
-
-/* ── rolled over ────────────────────────────────────────────────────────── */
-
-.rolled .pbody { display: grid; grid-template-columns: 1fr 1fr; align-content: start; }
-.rolled .ro:nth-child(2n + 1):not(:last-child) { border-right: 1px solid var(--rule); }
-
-.ro {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  padding: 6px 16px;
-  border-bottom: 1px solid var(--rule);
-  cursor: pointer;
-  min-width: 0;
-}
-.ro:hover { background: var(--panel-2); }
-
-.ro-age {
-  font: 10px/1.4 var(--mono);
-  letter-spacing: .08em;
-  color: var(--orange-dim);
-  font-variant-numeric: tabular-nums;
-  flex: 0 0 auto;
-}
-.ro-age.hot { color: var(--orange); }
-
-.ro-text {
-  font: 12px/1.4 var(--sans);
-  color: var(--bone);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-.ro-text code { font: 10.5px/1 var(--mono); color: var(--dim); }
-
-/* ── integrity ──────────────────────────────────────────────────────────── */
-
-.ig {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 5px 16px;
-  border-bottom: 1px solid var(--rule);
-  font: 10px/1.5 var(--mono);
-  letter-spacing: .06em;
-}
-.ig[data-clickable] { cursor: pointer; }
-.ig[data-clickable]:hover { background: var(--panel-2); }
-.ig-k { color: var(--bone); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ig-n { color: var(--orange-dim); flex: 0 0 auto; font-variant-numeric: tabular-nums; }
-.ig-src { color: var(--dimmer); flex: 1 1 auto; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-.ig-head {
-  padding: 7px 16px 4px;
-  font: 9px/1 var(--mono);
-  letter-spacing: .16em;
-  color: var(--dim);
-  border-bottom: 1px solid var(--rule);
-  background: var(--panel);
-  position: sticky;
-  top: 0;
-  z-index: 2;
-}
-.ig-more {
-  padding: 5px 16px;
-  font: 9px/1 var(--mono);
-  letter-spacing: .12em;
-  color: var(--dimmer);
 }
 
 .empty-row {

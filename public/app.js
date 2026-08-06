@@ -204,62 +204,6 @@ function renderHero(state) {
   flashIfChanged($('p-hero'), [hero.label, hero.n, hero.sub]);
 }
 
-// ── todos ────────────────────────────────────────────────────────────────────
-
-// The source reference, link count and row index all lived on the row at one
-// point. They repeat what the group header already says and turned every row into
-// five competing elements, so they moved into the tooltip. What is left is the
-// state of the item, its text, its project (in the time sections, where the header
-// no longer names one), and the two facts that can change your plan: it is due, or
-// it has been sitting.
-function todoRow(todo, showProject) {
-  const row = el('div', 'todo' + (todo.done ? ' is-done' : ''));
-  row.title = `${plain(todo.text)}\n${todo.source}:${todo.line}`;
-
-  const box = el('span', 'box' + (todo.done ? ' on' : ''));
-  if (!todo.done && (todo.dueState === 'today' || todo.dueState === 'overdue')) box.classList.add('hot');
-  row.append(box);
-
-  row.append(htmlNode('div', 'ttext', todo.html));
-
-  const meta = el('div', 'tmeta');
-  if (showProject && todo.project) meta.append(el('span', 'chip proj', todo.project.toUpperCase()));
-  if (todo.section && todo.section !== 'Todos') meta.append(el('span', 'chip', todo.section.toUpperCase()));
-  if (todo.due) {
-    const label = todo.dueState === 'today' ? 'DUE TODAY' : `DUE ${todo.due.slice(5)}`;
-    meta.append(el('span', `chip due-${todo.dueState}`, label));
-  }
-  if (todo.scheduled) meta.append(el('span', 'chip sched', `SCHED ${noteName(todo.source).slice(5)}`));
-  else if (todo.ageDays >= 1) meta.append(el('span', 'chip age', `${pad2(todo.ageDays)}D`));
-  row.append(meta);
-
-  return clickable(row, todo.obsidian);
-}
-
-// Groups arrive from the parser already bucketed and ordered: the time horizons
-// (OVERDUE, TODAY, UPCOMING), then backlog project groups, then DONE. The client
-// renders in that order — the only decisions left here are the BACKLOG divider,
-// the collapsed DONE section, and where the project chip shows.
-// The full grouped todo list was removed 2026-08-06: Lee did not use it, and the
-// runs panel took the column. What survives is the part that is actually a
-// prompt — what is late and what is due today. The header readout still carries
-// the counts; this says which.
-function renderDue(state) {
-  const due = state.groups
-    .flatMap((g) => g.todos)
-    .filter((t) => !t.done && !t.scheduled
-      && (t.dueState === 'overdue' || t.dueState === 'today'));
-  $('p-due').hidden = due.length === 0;
-  if (!due.length) return;
-  // Overdue first: it is the only one of the two that is already a problem.
-  due.sort((a, b) => (a.dueState === 'overdue' ? 0 : 1) - (b.dueState === 'overdue' ? 0 : 1));
-  $('due-meta').textContent =
-    `${pad2(state.stats.overdue)} OVERDUE · ${pad2(state.stats.dueToday)} TODAY`;
-  // map(todoRow) would hand the array index to showProject. Call it explicitly.
-  fill('due-body', due.map((t) => todoRow(t, true)), 'NOTHING DUE');
-  flashIfChanged($('p-due'), due);
-}
-
 // ── runs ─────────────────────────────────────────────────────────────────────
 
 function runRow(r, now) {
@@ -321,100 +265,6 @@ function renderRuns(runs) {
     `${pad2(runs.length)} RUNS` + (needing ? ` · ${pad2(needing)} NEEDS YOU` : '');
   fill('runs-list', runs.map((r) => runRow(r, now)), 'NO RUN IS PUBLISHING STATUS');
   flashIfChanged($('p-runs'), runs);
-}
-
-// ── decisions ────────────────────────────────────────────────────────────────
-
-function renderDecisions(state) {
-  const rows = state.decisions.map((d) => {
-    const row = el('div', 'dec');
-    row.append(el('span', 'dec-date', d.date.slice(5)));
-    const body = el('div');
-    body.append(htmlNode('div', 'dec-text', d.html));
-    body.append(el('div', 'dec-src', noteName(d.source)));
-    row.append(body);
-    return clickable(row, d.obsidian);
-  });
-
-  fill('decisions-body', rows, 'NO RECORDED DECISIONS');
-  $('decisions-meta').textContent = pad2(state.decisions.length);
-  flashIfChanged($('p-decisions'), state.decisions);
-}
-
-// ── rolled over ──────────────────────────────────────────────────────────────
-
-function renderRolled(state) {
-  const items = state.rolledOver;
-  const rows = items.map((t) => {
-    const row = el('div', 'ro');
-    row.title = plain(t.text);
-    row.append(el('span', 'ro-age' + (t.ageDays >= 3 ? ' hot' : ''), `${pad2(t.ageDays)}D`));
-    row.append(htmlNode('span', 'ro-text', t.html));
-    return clickable(row, t.obsidian);
-  });
-
-  fill('rolled-body', rows, 'NONE — CLEAN ROLLOVER');
-  $('rolled-meta').textContent = items.length
-    ? `${pad2(items.length)} · OLDEST ${pad2(items[0].ageDays)}D`
-    : 'CLEAR';
-  flashIfChanged($('p-rolled'), items);
-}
-
-// ── integrity ────────────────────────────────────────────────────────────────
-
-const ORPHANS_SHOWN = 6;
-
-/**
- * Two failure modes of a linked vault, in one tile: links that point at nothing,
- * and notes that nothing points at. Broken links collapse hard — a single
- * ambiguous target usually accounts for most of the count — so they are grouped
- * by target rather than listed per occurrence.
- */
-function renderIntegrity(state) {
-  const rows = [];
-
-  const byTarget = new Map();
-  for (const b of state.health.broken) {
-    const entry = byTarget.get(b.link) ?? { link: b.link, count: 0, first: b.source };
-    entry.count += 1;
-    byTarget.set(b.link, entry);
-  }
-  const targets = [...byTarget.values()].sort((a, b) => b.count - a.count || a.link.localeCompare(b.link));
-
-  if (targets.length) rows.push(el('div', 'ig-head', 'UNRESOLVED'));
-  for (const t of targets) {
-    const row = el('div', 'ig');
-    row.append(el('span', 'ig-k', `[[${t.link}]]`));
-    if (t.count > 1) row.append(el('span', 'ig-n', `×${t.count}`));
-    row.append(el('span', 'ig-src', t.count > 1 ? `${t.count} NOTES` : noteName(t.first)));
-    row.title = `${t.link} — first seen in ${t.first}`;
-    rows.push(row);
-  }
-
-  // Notes that link outward but have nothing linking in: thinking that never got
-  // connected back. Ranked by outbound, so the most-developed strays surface first.
-  const orphans = state.graph.nodes
-    .filter((n) => n.orphan)
-    .sort((a, b) => b.outbound - a.outbound || a.label.localeCompare(b.label));
-
-  if (orphans.length) {
-    rows.push(el('div', 'ig-head', `ORPHANED · ${pad2(orphans.length)}`));
-    for (const n of orphans.slice(0, ORPHANS_SHOWN)) {
-      const row = el('div', 'ig');
-      row.append(el('span', 'ig-k', n.label));
-      row.append(el('span', 'ig-src', `${n.folder || 'ROOT'} · OUT ${pad2(n.outbound)}`));
-      row.title = n.id;
-      rows.push(clickable(row, n.obsidian));
-    }
-    if (orphans.length > ORPHANS_SHOWN) {
-      rows.push(el('div', 'ig-more', `+${pad2(orphans.length - ORPHANS_SHOWN)} MORE`));
-    }
-  }
-
-  fill('integrity-body', rows, 'ALL LINKS RESOLVE · NO ORPHANS');
-  $('integrity-meta').textContent =
-    `${pad2(state.health.broken.length)} BROKEN · ${pad2(state.health.orphans)} ORPHAN`;
-  flashIfChanged($('p-integrity'), [state.health.broken, state.health.orphans]);
 }
 
 // ── warnings + footer ────────────────────────────────────────────────────────
@@ -885,11 +735,7 @@ function render(state) {
   // quiet time forever. fill() keeps scroll position, so an unguarded repaint
   // costs what every other panel already pays.
   renderRuns(state.runs || []);
-  renderDue(state);
   renderLattice(state);
-  renderDecisions(state);
-  renderRolled(state);
-  renderIntegrity(state);
   renderWarnings(state);
   renderFooter(state);
 }
