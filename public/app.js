@@ -263,27 +263,37 @@ function unitList(units, now) {
     label.title = `${u.id} ${u.label} — ${u.state}`;
     line.append(label);
 
-    // A stamp that cannot produce a duration is a writer bug, and rendering the
-    // bare word "running" hides it as though the time were merely unknown.
-    // Measured 2026-08-06: a run wrote a unit start 23 minutes in the future,
-    // and the row said "running" for hours with nothing to indicate why.
+    // One column, one kind of thing: a duration. The dot on the left already
+    // says the state, so repeating "running" in the text was both redundant and
+    // the reason the two rows never lined up. Anomalies get a short word instead
+    // of a number, in amber, because they are defects rather than measurements.
     let t = '';
     let bad = false;
+    let why = '';
     if (u.state === 'done' && u.started && u.ended) {
       t = humanMs(Date.parse(u.ended) - Date.parse(u.started));
     } else if (u.state === 'running') {
-      if (!u.started) { t = 'running · no start'; bad = true; }
-      else {
+      if (!u.started) {
+        t = 'no start'; bad = true;
+        why = 'This unit is running but recorded no start time';
+      } else {
         const ms = now - Date.parse(u.started);
-        if (!Number.isFinite(ms)) { t = 'running · bad stamp'; bad = true; }
-        else if (ms < 0) { t = `running · starts in ${humanMs(-ms)}`; bad = true; }
-        else t = `running ${humanMs(ms)}`;
+        if (!Number.isFinite(ms)) {
+          t = 'bad stamp'; bad = true;
+          why = `Unparseable start time: ${u.started}`;
+        } else if (ms < 0) {
+          t = `+${humanMs(-ms)}`; bad = true;
+          why = `Start time is ${humanMs(-ms)} in the future: ${u.started}`;
+        } else {
+          t = humanMs(ms);
+        }
       }
     } else if (u.state === 'failed') {
       t = 'failed';
     } else if (u.state === 'blocked') {
       t = 'blocked';
     }
+
     // A cluster on every unit that fanned out, so you can see that it did
     // without the agent names costing a row each.
     if (u.agents.length) {
@@ -297,7 +307,9 @@ function unitList(units, now) {
         `${u.agents.filter((a) => a.state === 'done').length} of ${u.agents.length} agents done`;
       line.append(cluster);
     }
-    line.append(el('span', `run-u-t${bad ? ' is-bad' : ''}`, t));
+    const ut = el('span', `run-u-t${bad ? ' is-bad' : ''}`, t);
+    if (why) ut.title = why;
+    line.append(ut);
     wrap.append(line);
 
     // Names only under the unit actually running, which is at most one or two.
@@ -312,10 +324,10 @@ function unitList(units, now) {
         let at = '';
         if (a.state === 'done' && a.started && a.ended) {
           at = humanMs(Date.parse(a.ended) - Date.parse(a.started));
-        } else if (a.state === 'running') {
-          const since = a.started ? humanMs(now - Date.parse(a.started)) : '--';
-          at = since === '--' ? 'running' : `running ${since}`;
-        } else if (a.state !== 'todo') {
+        } else if (a.state === 'running' && a.started) {
+          const ms = now - Date.parse(a.started);
+          at = ms >= 0 ? humanMs(ms) : `+${humanMs(-ms)}`;
+        } else if (a.state !== 'todo' && a.state !== 'running') {
           at = a.state;
         }
         sub.append(el('span', 'run-a-t', at));
@@ -372,16 +384,15 @@ function runRow(r, now) {
   // in. Agents share their parent's terminal, so a sub-row does the same thing.
   // Only the runId crosses the wire; the server resolves the tty from the run's
   // own file. A run that recorded no tty is simply not clickable.
-  if (r.tty) {
-    row.dataset.clickable = '';
-    row.title = `Open the terminal running this (${r.tty})`;
-    row.addEventListener('click', () => openRunTerminal(r.runId, row));
-  } else {
-    // Silently inert reads as broken. Say why: the session predates the tty
-    // field, or never recorded one, and will become clickable when it writes.
-    row.title = 'This run recorded no terminal, so it cannot be opened';
-    row.dataset.noTerminal = '';
-  }
+  // Always clickable. A run that recorded no tty can often still be resolved
+  // server-side from the live agent processes, and when it cannot the click
+  // fails visibly in amber. Gating on r.tty here made a resolvable run look
+  // permanently dead.
+  row.dataset.clickable = '';
+  row.title = r.tty
+    ? `Open the terminal running this (${r.tty})`
+    : 'Open the terminal running this (will be resolved from the running session)';
+  row.addEventListener('click', () => openRunTerminal(r.runId, row));
 
   const c = counts(r.units);
   const e = eta(r.units);

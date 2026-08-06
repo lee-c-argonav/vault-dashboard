@@ -42,15 +42,69 @@ export async function focusRunTerminal(id, vaultPath) {
   }
   const run = runs.find((r) => r.runId === runId);
   if (!run) return { ok: false, status: 404, error: 'unknown run' };
-  if (!run.tty) return { ok: false, status: 404, error: 'run recorded no terminal' };
-  if (!TTY_RE.test(run.tty)) return { ok: false, status: 400, error: 'not a tty path' };
+
+  // A recorded tty is authoritative. Sessions that predate the field have none,
+  // so fall back to inferring it from the live agent processes. Inference is a
+  // heuristic and is reported as one; it never overrides a recorded value.
+  let tty = run.tty;
+  let inferred = false;
+  if (!tty) {
+    tty = await inferTty(run);
+    inferred = Boolean(tty);
+  }
+  if (!tty) return { ok: false, status: 404, error: 'no terminal recorded or inferable' };
+  if (!TTY_RE.test(tty)) return { ok: false, status: 400, error: 'not a tty path' };
 
   return new Promise((resolve) => {
-    execFile('osascript', [SCRIPT, run.tty], { timeout: 5000 }, (err, stdout) => {
+    execFile('osascript', [SCRIPT, tty], { timeout: 5000 }, (err, stdout) => {
       if (err) return resolve({ ok: false, status: 500, error: 'osascript failed' });
       const result = String(stdout).trim();
       // notfound is a normal outcome, not a failure: the tab may be closed.
-      resolve({ ok: result === 'ok', status: result === 'ok' ? 200 : 404, result });
+      resolve({ ok: result === 'ok', status: result === 'ok' ? 200 : 404, result, tty, inferred });
     });
+  });
+}
+
+/**
+ * Best-effort: which Terminal tab is this run probably in?
+ *
+ * Matches live agent processes by working directory against the run's project,
+ * then breaks ties on start time, because two sessions can sit in the same repo.
+ * Everything here is read-only inspection of the process table, in the same
+ * spirit as metrics.js, and the result is always flagged `inferred` so a caller
+ * never mistakes a guess for something the run actually recorded.
+ */
+async function inferTty(run) {
+  if (!run.project) return '';
+  const started = Date.parse(run.started);
+
+  const pids = await sh('pgrep', ['-x', 'claude']);
+  const candidates = [];
+  for (const pid of pids.split('\n').map((s) => s.trim()).filter(Boolean)) {
+    // `ps -o lstart=` so a tie can be broken on which session began first.
+    const info = await sh('ps', ['-o', 'tty=,lstart=', '-p', pid]);
+    const tty = info.trim().split(/\s+/)[0];
+    if (!tty || tty === '??') continue;
+    const cwd = (await sh('lsof', ['-a', '-p', pid, '-d', 'cwd', '-Fn']))
+      .split('\n').find((l) => l.startsWith('n'))?.slice(1) ?? '';
+    if (!cwd) continue;
+    if (cwd.split('/').pop() !== run.project) continue;
+    const begun = Date.parse(info.trim().slice(tty.length).trim());
+    candidates.push({ tty: `/dev/${tty}`, begun });
+  }
+  if (!candidates.length) return '';
+  if (candidates.length === 1) return candidates[0].tty;
+
+  // The owning session must have been alive before its run started. Among those,
+  // the one that began most recently is the closest fit.
+  const before = candidates
+    .filter((c) => Number.isFinite(c.begun) && Number.isFinite(started) && c.begun <= started)
+    .sort((a, b) => b.begun - a.begun);
+  return (before[0] ?? candidates[0]).tty;
+}
+
+function sh(cmd, args) {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { timeout: 3000 }, (err, stdout) => resolve(err ? '' : String(stdout)));
   });
 }
