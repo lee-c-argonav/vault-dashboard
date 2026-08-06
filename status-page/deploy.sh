@@ -39,6 +39,12 @@ VAULT_HUD_VAULT="$VAULT" node "$HERE/build.js" >/dev/null || {
 # The build writes status.html beside itself; Vercel serves ./public.
 cp "$HERE/status.html" "$HERE/public/index.html" || exit 1
 
+# One mark for one instrument: the icons are the HUD's, copied at deploy time
+# rather than duplicated in the repo.
+for icon in apple-touch-icon.png favicon-32.png icon-192.png icon-512.png icon-maskable-512.png; do
+  cp "$HERE/../public/$icon" "$HERE/public/$icon" || exit 1
+done
+
 cd "$HERE" || exit 1
 out=$(vercel deploy --prod --yes --scope "${VERCEL_SCOPE:-argonav}" 2>&1)
 status=$?

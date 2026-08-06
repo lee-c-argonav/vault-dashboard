@@ -91,8 +91,9 @@ body{
 .run.paused,.run.done{border-left-color:var(--rule-hot)}
 
 .hd{display:flex;align-items:baseline;gap:10px;justify-content:space-between}
+.hd .st{flex:none;margin:0}
 h2{font:600 17px/1.35 var(--sans);margin:0;overflow-wrap:anywhere}
-.mach{flex:none;font:10px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+.mach{font:11px/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
 
 .st{display:inline-block;margin:11px 0 0;padding:4px 7px;border:1px solid var(--rule-hot);
     font:10px/1 var(--mono);letter-spacing:.13em;color:var(--dim);white-space:nowrap}
@@ -109,9 +110,9 @@ h2{font:600 17px/1.35 var(--sans);margin:0;overflow-wrap:anywhere}
 
 /* Units. Same three columns as the HUD so the two surfaces read alike. */
 .units{margin:14px 0 0;border-top:1px solid var(--rule);padding-top:4px}
-.u{display:grid;grid-template-columns:7px 44px minmax(0,1fr) 62px;gap:8px;
+.u{display:grid;grid-template-columns:7px 38px minmax(0,1fr) 54px;gap:8px;
    align-items:baseline;padding:5px 0}
-.dot{width:6px;height:6px;align-self:center;background:var(--rule-hot)}
+.dot{width:6px;height:6px;align-self:start;margin-top:7px;background:var(--rule-hot)}
 .u.done .dot{background:var(--bone)}
 .u.running .dot{background:var(--orange)}
 .u.blocked .dot{background:var(--amber)}
@@ -125,13 +126,13 @@ h2{font:600 17px/1.35 var(--sans);margin:0;overflow-wrap:anywhere}
 .dur.is-done{color:var(--dim)}
 .dur.is-running{color:var(--orange)}
 .dur.is-bad{color:var(--amber)}
-.more{padding:5px 0 5px 67px;font:10px/1.45 var(--mono);letter-spacing:.1em;
+.more{padding:5px 0 5px 61px;font:10px/1.45 var(--mono);letter-spacing:.1em;
       text-transform:uppercase;color:var(--text-3)}
 
 /* Sub-agents, indented past the label column exactly as on the desktop. */
-.a{display:grid;grid-template-columns:4px minmax(0,1fr) 62px;gap:8px;
-   align-items:baseline;padding:3px 0 3px 67px}
-.a .dot{width:4px;height:4px;background:var(--rule-hot)}
+.a{display:grid;grid-template-columns:4px minmax(0,1fr) 54px;gap:8px;
+   align-items:baseline;padding:3px 0 3px 61px}
+.a .dot{width:4px;height:4px;align-self:start;margin-top:7px;background:var(--rule-hot)}
 .a.done .dot{background:var(--bone)}
 .a.running .dot{background:var(--orange)}
 .a.blocked .dot{background:var(--amber)}
@@ -139,7 +140,7 @@ h2{font:600 17px/1.35 var(--sans);margin:0;overflow-wrap:anywhere}
 .al{font:13px/1.45 var(--sans);color:var(--text-3);overflow-wrap:anywhere}
 .a.done .al,.a.running .al{color:var(--dim)}
 
-.foot{display:flex;justify-content:space-between;gap:12px;margin:13px 0 0;
+.foot{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 12px;margin:13px 0 0;
       padding-top:10px;border-top:1px solid var(--rule);
       font:11px/1.4 var(--mono);font-variant-numeric:tabular-nums;color:var(--dim)}
 
@@ -189,23 +190,22 @@ function runCard(r, now, expanded) {
 <article class="run collapsed ${esc(st)}${quietMs(r, now) === null ? ' nostamp' : ''}">
   <div class="hd">
     <h2>${esc(r.goal)}</h2>
-    <span class="mini">${c.done}/${c.total}</span>
+    <span class="st">${esc(stateText(r, now))}</span>
   </div>
-  <span class="st">${esc(stateText(r, now))}</span>
+  <p class="foot"><span class="mach">${esc(r.machine)}</span> · ${c.done}/${c.total}</p>
 </article>`;
   }
   return `
 <article class="run ${esc(st)}${quietMs(r, now) === null ? ' nostamp' : ''}">
   <div class="hd">
     <h2>${esc(r.goal)}</h2>
-    <span class="mach">${esc(r.machine)}</span>
+    <span class="st">${esc(stateText(r, now))}</span>
   </div>
-  <span class="st">${esc(stateText(r, now))}</span>
   ${r.note ? `<p class="note">${esc(r.note)}</p>` : ''}
   ${ask ? `<p class="ask">${esc(ask)}</p>` : ''}
   ${r.units.length ? `<div class="units">${unitRows(r.units, now)}</div>` : ''}
   <div class="foot">
-    <span>${c.done} of ${c.total} done${elapsed ? ` · ${elapsed}` : ''}</span>
+    <span><span class="mach">${esc(r.machine)}</span> · ${c.done} of ${c.total} done${elapsed ? ` · ${elapsed}` : ''}</span>
     <span>${e ? esc(etaText(e)) : ''}</span>
   </div>
 </article>`;
@@ -242,6 +242,12 @@ export async function build(now = Date.now()) {
 <meta name="color-scheme" content="dark light">
 <meta name="theme-color" content="#08090A" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#F4F2EE" media="(prefers-color-scheme: light)">
+<link rel="icon" href="/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Runs">
 <title>Run status</title>
 <style>${CSS}</style>
 <p class="k">${needing ? 'Needs you' : 'Active runs'}</p>
