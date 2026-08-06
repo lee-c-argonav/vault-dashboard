@@ -2,6 +2,13 @@
 // Every vault-authored string arrives here either as pre-escaped `.html` from the
 // parser or is inserted with textContent. Nothing is built by concatenating raw text.
 
+// Shared with status-page/build.js, which renders the same runs for the phone.
+// Both import it so the two surfaces cannot disagree about whether a run is
+// waiting on you. Liveness lives here, not in State: State is diffed by
+// stringify below, so a clock-derived field would look changed on every push.
+import { runState, isQuiet, stateText, eta, humanMs, etaText, counts }
+  from './runs-view.js';
+
 const STATE_SOURCES = ['/api/state'];
 
 const $ = (id) => document.getElementById(id);
@@ -199,10 +206,6 @@ function renderHero(state) {
 
 // ── todos ────────────────────────────────────────────────────────────────────
 
-// Sections the viewer has toggled open. Only DONE is collapsible, and it starts
-// collapsed, so its key is absent until the header is clicked.
-const expanded = new Set();
-
 // The source reference, link count and row index all lived on the row at one
 // point. They repeat what the group header already says and turned every row into
 // five competing elements, so they moved into the tooltip. What is left is the
@@ -237,50 +240,87 @@ function todoRow(todo, showProject) {
 // (OVERDUE, TODAY, UPCOMING), then backlog project groups, then DONE. The client
 // renders in that order — the only decisions left here are the BACKLOG divider,
 // the collapsed DONE section, and where the project chip shows.
-function renderTodos(state) {
-  const rows = [];
-  let backlogStarted = false;
-  for (const group of state.groups) {
-    if (group.kind === 'backlog' && !backlogStarted) {
-      backlogStarted = true;
-      rows.push(el('div', 'gsection', 'BACKLOG · BY PROJECT'));
-    }
+// The full grouped todo list was removed 2026-08-06: Lee did not use it, and the
+// runs panel took the column. What survives is the part that is actually a
+// prompt — what is late and what is due today. The header readout still carries
+// the counts; this says which.
+function renderDue(state) {
+  const due = state.groups
+    .flatMap((g) => g.todos)
+    .filter((t) => !t.done && !t.scheduled
+      && (t.dueState === 'overdue' || t.dueState === 'today'));
+  $('p-due').hidden = due.length === 0;
+  if (!due.length) return;
+  // Overdue first: it is the only one of the two that is already a problem.
+  due.sort((a, b) => (a.dueState === 'overdue' ? 0 : 1) - (b.dueState === 'overdue' ? 0 : 1));
+  $('due-meta').textContent =
+    `${pad2(state.stats.overdue)} OVERDUE · ${pad2(state.stats.dueToday)} TODAY`;
+  // map(todoRow) would hand the array index to showProject. Call it explicitly.
+  fill('due-body', due.map((t) => todoRow(t, true)), 'NOTHING DUE');
+  flashIfChanged($('p-due'), due);
+}
 
-    const collapsible = group.kind === 'done';
-    const isOpen = !collapsible || expanded.has(group.key);
-    const headClickable = collapsible || !!group.obsidian;
+// ── runs ─────────────────────────────────────────────────────────────────────
 
-    const head = el('div', `ghead g-${group.kind}` + (isOpen ? ' open' : ' closed') + (headClickable ? '' : ' static'));
-    head.append(el('span', 'gcaret'));
-    head.append(el('span', 'glabel', group.label));
-    head.append(el('span', 'rule-fill'));
-    head.append(el('span', 'gopen', pad2(collapsible ? group.done : group.open)));
+function runRow(r, now) {
+  const st = runState(r);
+  const quiet = isQuiet(r, now);
+  const row = el('div', `run is-${st}${quiet ? ' is-quiet' : ''}`);
+  row.append(el('span', 'run-rail'));
 
-    if (collapsible) {
-      head.addEventListener('click', () => {
-        if (isOpen) expanded.delete(group.key);
-        else expanded.add(group.key);
-        renderTodos(state);
-      });
-      rows.push(head);
-    } else {
-      rows.push(clickable(head, group.obsidian));
-    }
+  const main = el('div', 'run-main');
+  const top = el('div', 'run-top');
+  const goal = el('span', 'run-goal', r.goal);
+  goal.title = r.goal;
+  top.append(goal, el('span', 'run-proj', [r.project, r.machine].filter(Boolean).join(' · ')));
+  main.append(top);
 
-    if (!isOpen) continue;
-    const showProject = group.kind === 'horizon';
-    for (const todo of group.todos) rows.push(todoRow(todo, showProject));
+  if (r.note) {
+    const note = el('div', 'run-note', r.note);
+    note.title = r.note;
+    main.append(note);
   }
 
-  fill('todos-body', rows, 'NO TODOS IN SCOPE');
+  // The ask is rendered in full rather than behind a click. A question you have
+  // to open is a question that waits another hour.
+  const source = st === 'needs-input' ? r.needsInput[0]
+    : st === 'blocked' ? r.blockers[0] : null;
+  const ask = source ? (source.question ?? source.what) : '';
+  if (ask) {
+    const age = source.since ? ` · ${humanMs(now - Date.parse(source.since))}` : '';
+    main.append(el('div', 'run-ask', ask + age));
+  }
 
-  // OPEN is what is owed now (the parser excludes future-scheduled work); SCHED
-  // surfaces that excluded count so the section headers still add up.
-  const done = state.groups.reduce((sum, g) => sum + g.done, 0);
-  const sched = state.groups.flatMap((g) => g.todos).filter((t) => !t.done && t.scheduled).length;
-  $('todos-meta').textContent =
-    `${pad2(state.stats.open)} OPEN` + (sched ? ` · ${pad2(sched)} SCHED` : '') + ` · ${pad2(done)} DONE`;
-  flashIfChanged($('p-todos'), state.groups);
+  if (r.units.length) {
+    const bar = el('div', 'run-bar');
+    for (const u of r.units) {
+      const blk = el('i', `run-blk${u.state === 'todo' ? '' : ` is-${u.state}`}`);
+      blk.title = `${u.id} ${u.label} — ${u.state}`;
+      bar.append(blk);
+    }
+    main.append(bar);
+  }
+  row.append(main);
+
+  const right = el('div', 'run-right');
+  // stateText, not a hand-built string. build.js renders the same label and the
+  // shared module exists so the two surfaces cannot drift apart on it.
+  right.append(el('div', 'run-state', stateText(r, now)));
+  const c = counts(r.units);
+  const e = eta(r.units);
+  right.append(el('div', 'run-eta', `${c.done}/${c.total}${e ? ` · ${etaText(e)}` : ''}`));
+  row.append(right);
+  return row;
+}
+
+function renderRuns(runs) {
+  const now = Date.now();
+  const needing = runs.filter((r) => runState(r) === 'needs-input').length;
+  $('p-runs').classList.toggle('hot', needing > 0);
+  $('runs-count').textContent =
+    `${pad2(runs.length)} RUNS` + (needing ? ` · ${pad2(needing)} NEEDS YOU` : '');
+  fill('runs-list', runs.map((r) => runRow(r, now)), 'NO RUN IS PUBLISHING STATUS');
+  flashIfChanged($('p-runs'), runs);
 }
 
 // ── decisions ────────────────────────────────────────────────────────────────
@@ -840,7 +880,12 @@ function render(state) {
   renderHeader(state);
   renderFocus(state);
   renderHero(state);
-  renderTodos(state);
+  // Deliberately not guarded by diff(): runs carry no clock value, so a run that
+  // stops writing produces byte-identical State and a guard would freeze its
+  // quiet time forever. fill() keeps scroll position, so an unguarded repaint
+  // costs what every other panel already pays.
+  renderRuns(state.runs || []);
+  renderDue(state);
   renderLattice(state);
   renderDecisions(state);
   renderRolled(state);

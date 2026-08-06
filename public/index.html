@@ -142,14 +142,24 @@
 
 <main class="main">
 
-  <section class="panel col-todos" id="p-todos">
-    <div class="phead">
-      <span class="lab">TODOS</span>
-      <span class="rule-fill"></span>
-      <span class="phead-meta" id="todos-meta"></span>
-    </div>
-    <div class="pbody scroll" id="todos-body"></div>
-  </section>
+  <div class="lcol">
+    <section class="panel runs" id="p-runs">
+      <div class="phead">
+        <span class="lab">RUNS</span>
+        <span class="rule-fill"></span>
+        <span class="phead-meta" id="runs-count"></span>
+      </div>
+      <div class="pbody scroll" id="runs-list"></div>
+    </section>
+    <section class="panel due" id="p-due" hidden>
+      <div class="phead">
+        <span class="lab">DUE</span>
+        <span class="rule-fill"></span>
+        <span class="phead-meta" id="due-meta"></span>
+      </div>
+      <div class="pbody scroll" id="due-body"></div>
+    </section>
+  </div>
 
   <div class="rcol">
     <section class="panel lattice" id="p-lattice">
