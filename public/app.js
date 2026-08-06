@@ -263,14 +263,22 @@ function unitList(units, now) {
     label.title = `${u.id} ${u.label} — ${u.state}`;
     line.append(label);
 
-    // humanMs returns '--' for anything it cannot compute, and "running --" reads
-    // as a broken field. Fall back to the bare word rather than showing a dash.
+    // A stamp that cannot produce a duration is a writer bug, and rendering the
+    // bare word "running" hides it as though the time were merely unknown.
+    // Measured 2026-08-06: a run wrote a unit start 23 minutes in the future,
+    // and the row said "running" for hours with nothing to indicate why.
     let t = '';
+    let bad = false;
     if (u.state === 'done' && u.started && u.ended) {
       t = humanMs(Date.parse(u.ended) - Date.parse(u.started));
     } else if (u.state === 'running') {
-      const since = u.started ? humanMs(now - Date.parse(u.started)) : '--';
-      t = since === '--' ? 'running' : `running ${since}`;
+      if (!u.started) { t = 'running · no start'; bad = true; }
+      else {
+        const ms = now - Date.parse(u.started);
+        if (!Number.isFinite(ms)) { t = 'running · bad stamp'; bad = true; }
+        else if (ms < 0) { t = `running · starts in ${humanMs(-ms)}`; bad = true; }
+        else t = `running ${humanMs(ms)}`;
+      }
     } else if (u.state === 'failed') {
       t = 'failed';
     } else if (u.state === 'blocked') {
@@ -289,7 +297,7 @@ function unitList(units, now) {
         `${u.agents.filter((a) => a.state === 'done').length} of ${u.agents.length} agents done`;
       line.append(cluster);
     }
-    line.append(el('span', 'run-u-t', t));
+    line.append(el('span', `run-u-t${bad ? ' is-bad' : ''}`, t));
     wrap.append(line);
 
     // Names only under the unit actually running, which is at most one or two.
@@ -368,6 +376,11 @@ function runRow(r, now) {
     row.dataset.clickable = '';
     row.title = `Open the terminal running this (${r.tty})`;
     row.addEventListener('click', () => openRunTerminal(r.runId, row));
+  } else {
+    // Silently inert reads as broken. Say why: the session predates the tty
+    // field, or never recorded one, and will become clickable when it writes.
+    row.title = 'This run recorded no terminal, so it cannot be opened';
+    row.dataset.noTerminal = '';
   }
 
   const c = counts(r.units);

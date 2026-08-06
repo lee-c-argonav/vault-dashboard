@@ -500,6 +500,8 @@ body {
    vocabulary: orange confirms, amber misses. */
 .run[data-clickable] { cursor: pointer; }
 .run[data-clickable]:hover { background: var(--panel-2); }
+/* Not a hover state, just an honest cursor: this row knows it cannot be opened. */
+.run[data-no-terminal] { cursor: default; }
 .run.busy, .run.hit { outline: 1px solid var(--orange); outline-offset: -1px; }
 .run.miss { outline: 1px solid var(--amber); outline-offset: -1px; }
 
@@ -599,6 +601,9 @@ body {
   white-space: nowrap;
 }
 .run-u.is-running .run-u-t { color: var(--orange); }
+/* A stamp that cannot produce a duration is a defect in the writer, not a
+   quantity. Amber marks it as something to fix rather than something to read. */
+.run-u-t.is-bad { color: var(--amber); }
 
 /* Subagents. A cluster of dots rides the unit row so a fan-out is visible
    without costing a line, and the names appear only under the running unit. */

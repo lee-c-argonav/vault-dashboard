@@ -16,7 +16,11 @@ on run argv
       repeat with t in tabs of w
         if (tty of t) is target then
           set selected of t to true
-          set index of w to 1
+          -- `set index of w to 1` looks like it raises the window and does not:
+          -- measured 2026-08-06, asking for ttys002 brought ttys005 to the front.
+          -- `frontmost` is the property that actually reorders, and it must be
+          -- set before activate, or activate raises whatever Terminal last had.
+          set frontmost of w to true
           activate
           return "ok"
         end if
