@@ -273,7 +273,7 @@ function unitList(units, now) {
         `${u.agents.filter((a) => a.state === 'done').length} of ${u.agents.length} agents done`;
       line.append(cluster);
     }
-    const ut = el('span', `dur is-${d.state}${d.bad ? ' is-bad' : ''}`, d.text);
+    const ut = el('span', d.cls, d.text);
     if (d.why) ut.title = d.why;
     line.append(ut);
     wrap.append(line);
@@ -288,7 +288,7 @@ function unitList(units, now) {
         alabel.title = a.label;
         sub.append(alabel);
         const ad = durationOf(a, now);
-        const atn = el('span', `dur is-${ad.state}${ad.bad ? ' is-bad' : ''}`, ad.text);
+        const atn = el('span', ad.cls, ad.text);
         if (ad.why) atn.title = ad.why;
         sub.append(atn);
         wrap.append(sub);

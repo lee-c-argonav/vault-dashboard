@@ -130,32 +130,38 @@ export function rowSignature(run, now) {
  *
  * Returns the text, whether it is an anomaly rather than a measurement, and why.
  */
+// A column of numbers stays a column of numbers. Where no duration can be
+// computed the cell is a dash, always the same dash and always the same colour
+// whatever the state, because the answer is identical in every such case: we
+// cannot tell you. The reason lives in the tooltip, not in the column.
+const NO_TIME = '—';
+const cell = (text, bad, why, state) =>
+  ({ text, bad, why, state, cls: `dur is-${state}${bad ? ' is-bad' : ''}` });
+
 export function durationOf(x, now) {
   if (x.state === 'done') {
     if (x.started && x.ended) {
       const ms = Date.parse(x.ended) - Date.parse(x.started);
-      if (ms < 0) return { text: 'ends before start', bad: true, why: `ended ${x.ended} precedes started ${x.started}`, state: 'done' };
-      return { text: humanMs(ms), bad: false, why: '', state: 'done' };
+      if (ms < 0) {
+        return cell(NO_TIME, true, `Ended before it started: ${x.ended} precedes ${x.started}`, 'done');
+      }
+      return cell(humanMs(ms), false, '', 'done');
     }
-    return { text: 'no timing', bad: true, why: 'Done but missing a start or end stamp', state: 'done' };
+    return cell(NO_TIME, true, 'Done, but missing a start or end stamp', 'done');
   }
   if (x.state === 'running') {
-    if (!x.started) return { text: 'no start', bad: true, why: 'Running but recorded no start time', state: 'running' };
+    if (!x.started) return cell(NO_TIME, true, 'Running, but recorded no start time', 'running');
     const ms = now - Date.parse(x.started);
     if (ms < 0) {
-      // NOT a countdown. The recorded start is ahead of the clock, so no elapsed
-      // time can be computed. `+1h8m` read as "starts in 1h8m", which is the
-      // opposite of the truth: this is running now, we just cannot say for how
-      // long. The word says that; the tooltip says why.
-      return { text: 'unknown', bad: true,
-        why: `Running now, but its recorded start is ${humanMs(-ms)} ahead of the clock (${x.started}), so no elapsed time can be computed. The writing session's clock is wrong.`,
-        state: 'running' };
+      return cell(NO_TIME, true,
+        `Running now, but its recorded start is ${humanMs(-ms)} ahead of the clock (${x.started}), so no elapsed time can be computed. The writing session's clock is wrong.`,
+        'running');
     }
-    return { text: humanMs(ms), bad: false, why: '', state: 'running' };
+    return cell(humanMs(ms), false, '', 'running');
   }
   // failed and blocked are already carried by the dot, so the cell stays empty
   // rather than repeating the state as if it were a measurement.
-  return { text: '', bad: false, why: '', state: x.state };
+  return cell('', false, '', x.state);
 }
 
 export const UNIT_WINDOW = 5;

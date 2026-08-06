@@ -17,7 +17,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { homedir } from 'node:os';
 import { readRuns } from '../runs.js';
 import {
-  LABEL, runState, stateText, durationOf, unitWindow,
+  LABEL, runState, stateText, durationOf, unitWindow, expandSet,
   eta, etaText, elapsedText, humanMs, counts,
 } from '../public/runs-view.js';
 
@@ -116,7 +116,7 @@ h2{font:600 17px/1.35 var(--sans);margin:0;overflow-wrap:anywhere}
      text-align:right;white-space:nowrap;color:var(--dimmer)}
 .dur.is-done{color:var(--dim)}
 .dur.is-running{color:var(--orange)}
-.dur.is-done.is-bad,.dur.is-running.is-bad,.dur.is-bad{color:var(--amber)}
+.dur.is-bad{color:var(--amber)}
 .more{padding:5px 0 5px 81px;font:10px/1.45 var(--mono);letter-spacing:.1em;
       text-transform:uppercase;color:var(--dimmer)}
 
@@ -133,6 +133,9 @@ h2{font:600 17px/1.35 var(--sans);margin:0;overflow-wrap:anywhere}
       padding-top:10px;border-top:1px solid var(--rule);
       font:11px/1.4 var(--mono);font-variant-numeric:tabular-nums;color:var(--dim)}
 
+.run.collapsed{padding:12px 16px}
+.run.collapsed h2{font-size:15px}
+.mini{flex:none;font:11px/1 var(--mono);font-variant-numeric:tabular-nums;letter-spacing:.06em;color:var(--dim)}
 .empty{color:var(--dim);font:12px/1.4 var(--mono);letter-spacing:.1em;text-transform:uppercase}
 footer{margin-top:30px;font:11px/1.5 var(--mono);color:var(--dim)}
 `;
@@ -146,13 +149,13 @@ function unitRows(units, now) {
           const ad = durationOf(a, now);
           return `<div class="a ${esc(a.state)}"><i class="dot"></i>` +
             `<span class="al">${esc(a.label)}</span>` +
-            `<span class="dur is-${esc(ad.state)}${ad.bad ? ' is-bad' : ''}">${esc(ad.text)}</span></div>`;
+            `<span class="${esc(ad.cls)}">${esc(ad.text)}</span></div>`;
         }).join('')
       : '';
     return `<div class="u ${esc(u.state)}"><i class="dot"></i>` +
       `<span class="uid">${esc(u.id)}</span>` +
       `<span class="ul">${esc(u.label || '—')}</span>` +
-      `<span class="dur is-${esc(d.state)}${d.bad ? ' is-bad' : ''}"${d.why ? ` title="${esc(d.why)}"` : ''}>${esc(d.text)}</span>` +
+      `<span class="${esc(d.cls)}"${d.why ? ` title="${esc(d.why)}"` : ''}>${esc(d.text)}</span>` +
       `</div>${agents}`;
   };
   return [
@@ -163,7 +166,7 @@ function unitRows(units, now) {
   ].join('');
 }
 
-function runCard(r, now) {
+function runCard(r, now, expanded) {
   const st = runState(r);
   const source = st === 'needs-input' ? r.needsInput[0] : st === 'blocked' ? r.blockers[0] : null;
   const ask = source ? (source.question ?? source.what) : '';
@@ -171,6 +174,18 @@ function runCard(r, now) {
   const c = counts(r.units);
   const e = eta(r.units);
   const elapsed = elapsedText(r, now);
+  if (!expanded) {
+    // Same rule as the desktop: at scale most runs collapse to one line, and
+    // the surfaces must agree about which ones. expandSet decides for both.
+    return `
+<article class="run collapsed ${esc(st)}">
+  <div class="hd">
+    <h2>${esc(r.goal)}</h2>
+    <span class="mini">${c.done}/${c.total}</span>
+  </div>
+  <span class="st">${esc(stateText(r, now))}</span>
+</article>`;
+  }
   return `
 <article class="run ${esc(st)}">
   <div class="hd">
@@ -191,6 +206,7 @@ function runCard(r, now) {
 export async function build(now = Date.now()) {
   const runs = await readRuns(VAULT);
   const needing = runs.filter((r) => runState(r) === 'needs-input').length;
+  const expand = expandSet(runs);
 
   // Group by repo, worst urgency first, exactly as the HUD does.
   const rank = { 'needs-input': 0, blocked: 1, running: 2, paused: 3, done: 4 };
@@ -208,7 +224,7 @@ export async function build(now = Date.now()) {
     ? groups.map(([repo, list]) =>
         (groups.length > 1 ? `<p class="repo">${esc(repo)}</p>` : '') +
         list.sort((a, b) => rank[runState(a)] - rank[runState(b)])
-            .map((r) => runCard(r, now)).join('')).join('')
+            .map((r) => runCard(r, now, expand.has(r.runId))).join('')).join('')
     : '<p class="empty">No run is publishing status</p>';
 
   const html = `<title>Run status</title>

@@ -642,7 +642,9 @@ body {
 .dur.is-done    { color: var(--dim); }
 .dur.is-running { color: var(--orange); }
 /* An anomaly is not a measurement. Amber outranks both above it. */
-.dur.is-done.is-bad, .dur.is-running.is-bad, .dur.is-bad { color: var(--amber); }
+/* One colour for a missing duration, whatever the state. Running or finished,
+   the answer is the same: we cannot tell you. */
+.dur.is-bad { color: var(--amber); }
 
 /* Last track in a unit row, last in an agent row. Without an explicit column a
    row with no agent cluster auto-places it 92px early. */
