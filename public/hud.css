@@ -450,10 +450,17 @@ body {
    simply runs beside the lattice and both get the entire row. */
 .main {
   display: grid;
-  grid-template-columns: 56fr 44fr;
+  /* minmax(0, …), never a bare fr. An fr track's automatic minimum is auto, so a
+     single nowrap goal propagates its min-content width up through the row and
+     sizes this column past the viewport, pushing the lattice off screen with no
+     scrollbar because body is overflow: hidden. Line 39 carries the same guard
+     for the same reason, and the old .run grid used to supply it here. */
+  grid-template-columns: minmax(0, 56fr) minmax(0, 44fr);
   gap: 1px;
   min-height: 0;
 }
+/* Belt and braces, so a future panel cannot reintroduce the same amputation. */
+.panel { min-width: 0; }
 
 /* ── runs ───────────────────────────────────────────────────────────────── */
 
@@ -466,6 +473,11 @@ body {
   padding: 10px 16px 8px;
   background: var(--bg);
   border-bottom: 1px solid var(--rule);
+  /* Sticky, or a run scrolled past its header cannot be attributed to a repo
+     at all. It already paints an opaque --bg, so nothing bleeds through. */
+  position: sticky;
+  top: 0;
+  z-index: 2;
 }
 .repo-name { font: 11px/1 var(--mono); letter-spacing: .18em; text-transform: uppercase; color: var(--bone); }
 .repo-tally {
@@ -562,7 +574,7 @@ body {
   font: 11px/1.45 var(--mono);
   letter-spacing: .06em;
   color: var(--dimmer);
-  white-space: nowrap; overflow: hidden; text-overflow: clip;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .run-u-label {
   font: 13px/1.45 var(--sans);

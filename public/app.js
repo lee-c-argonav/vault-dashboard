@@ -6,7 +6,7 @@
 // Both import it so the two surfaces cannot disagree about whether a run is
 // waiting on you. Liveness lives here, not in State: State is diffed by
 // stringify below, so a clock-derived field would look changed on every push.
-import { runState, isQuiet, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, counts }
+import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, counts }
   from './runs-view.js';
 
 const STATE_SOURCES = ['/api/state'];
@@ -216,7 +216,8 @@ const UNIT_WINDOW = 6;
  */
 function unitList(units, now) {
   const wrap = el('div', 'run-units');
-  let pivot = units.findIndex((u) => u.state === 'running' || u.state === 'failed');
+  let pivot = units.findIndex((u) => u.state === 'failed');
+  if (pivot === -1) pivot = units.findIndex((u) => u.state === 'running');
   if (pivot === -1) {
     const lastDone = units.map((u) => u.state).lastIndexOf('done');
     pivot = lastDone === -1 ? 0 : lastDone;
@@ -229,7 +230,9 @@ function unitList(units, now) {
   for (const u of units.slice(start, end)) {
     const line = el('div', `run-u${u.state === 'todo' ? '' : ` is-${u.state}`}`);
     line.append(el('i', 'run-u-dot'));
-    line.append(el('span', 'run-u-id', u.id));
+    const uid = el('span', 'run-u-id', u.id);
+    uid.title = u.id;
+    line.append(uid);
     const label = el('span', 'run-u-label', u.label || '—');
     label.title = `${u.id} ${u.label} — ${u.state}`;
     line.append(label);
@@ -256,9 +259,8 @@ function unitList(units, now) {
 
 function runRow(r, now) {
   const st = runState(r);
-  const quiet = isQuiet(r, now);
   const nostamp = quietMs(r, now) === null;
-  const row = el('div', `run is-${st}${quiet ? ' is-quiet' : ''}${nostamp ? ' is-nostamp' : ''}`);
+  const row = el('div', `run is-${st}${nostamp ? ' is-nostamp' : ''}`);
 
   const top = el('div', 'run-top');
   const goal = el('span', 'run-goal', r.goal);
