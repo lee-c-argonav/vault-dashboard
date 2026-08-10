@@ -220,13 +220,19 @@ body{
    own line instead. */
 .hd{display:flex;align-items:baseline;gap:8px 10px;justify-content:space-between;
     flex-wrap:wrap}
-.hd .st{flex:0 0 auto;margin:0}
+.hd .st{flex:0 1 auto;min-width:0;margin:0}
 h2{font:600 17px/1.35 var(--sans);margin:0;overflow-wrap:anywhere;
    flex:1 1 14ch;min-width:0}
 .mach{font:11px/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
 
+/* Wraps between its segments, and must. The badge grew from "RUNNING" to
+   "RUNNING · 1 BLOCKED · STAMPS 1h46m BEHIND · NO UPDATE 1h5m", and nowrap made
+   it overflow a 320px screen by 163px and put a sideways scrollbar on the whole
+   page. Separators carry real spaces, so wrapping breaks between segments and
+   never inside one. line-height goes from 1 to 1.5 so two lines do not collide. */
 .st{display:inline-block;margin:11px 0 0;padding:4px 7px;border:1px solid var(--rule-hot);
-    font:10px/1 var(--mono);letter-spacing:.13em;color:var(--dim);white-space:nowrap}
+    font:10px/1.5 var(--mono);letter-spacing:.13em;color:var(--dim);
+    white-space:normal;max-width:100%}
 .needs-input .st{color:var(--bg);background:var(--orange);border-color:var(--orange)}
 .blocked .st{color:var(--amber);border-color:var(--amber)}
 .nostamp .st{color:var(--amber);border-color:var(--amber);background:none}
