@@ -1,13 +1,15 @@
 // honesty.test.js — the board must not say a thing that contradicts what it shows.
 //
 // Two reports from the operator on 2026-08-10, both correct, both about a row
-// stating one thing while the rest of the row said another:
+// stating one thing while the rest of the row said another. Paraphrased onto the
+// synthetic fixtures below, because this repository is public and the originals
+// named a real project:
 //
-//   "Meet Google V2 says blocked, quiet. However, there is an agent/subagent
-//    running, so it is not really quiet."
+//   the widget run reads blocked and quiet, but a sub-agent is running under it,
+//   so it is not really quiet
 //
-//   "this session says not reporting, but it's currently an active session.
-//    I worked on it five minutes ago."
+//   this session reads not reporting, and it is active — it was worked in five
+//   minutes ago
 //
 // The run in question had a unit blocked 31 units back, four sub-agents marked
 // running, a writer that had not stamped `updated` in 2h22m, and a live session
