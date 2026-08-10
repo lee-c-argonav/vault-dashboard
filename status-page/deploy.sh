@@ -22,18 +22,36 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VAULT="${VAULT_HUD_VAULT:-$HOME/Obsidian/vault}"
 
 # The team and the page URL are machine- and account-specific, so they live in
 # the gitignored .env like every other such value in this repo. The URL in
 # particular is the ONLY access control the page has: it is an obscured slug on
 # a page that serves real vault content to an unauthenticated GET, so committing
 # it to a public repo would hand it to anyone. See .env.example.
+#
+# SOURCED BEFORE VAULT IS RESOLVED, and the order is load-bearing. It ran the
+# other way round from 2026-08-06 to 2026-08-10: VAULT expanded a
+# VAULT_HUD_VAULT that .env had not defined yet, fell back to the generic
+# default, and every deploy for four days built the page from a directory that
+# does not exist on this machine. The page published "No run is publishing
+# status" with a current timestamp while the desktop HUD showed a live run.
+# test/publish.test.js asserts this ordering; do not move either block.
 if [ -f "$HERE/../.env" ]; then
   set -a
   # shellcheck disable=SC1091
   . "$HERE/../.env"
   set +a
+fi
+
+VAULT="${VAULT_HUD_VAULT:-$HOME/Obsidian/vault}"
+
+# Fail here rather than let the build render an empty board. build.js refuses
+# too, so this is the first of two guards; it exists because the message a
+# person reads from the script can name the value they have to fix.
+if [ ! -d "$VAULT/15-Runs" ]; then
+  echo "no 15-Runs under $VAULT" >&2
+  echo "set VAULT_HUD_VAULT in $HERE/../.env (see .env.example); nothing deployed" >&2
+  exit 1
 fi
 
 : "${VERCEL_SCOPE:?set VERCEL_SCOPE in .env (see .env.example)}"

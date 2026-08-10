@@ -6,7 +6,7 @@
 // Both import it so the two surfaces cannot disagree about whether a run is
 // waiting on you. Liveness lives here, not in State: State is diffed by
 // stringify below, so a clock-derived field would look changed on every push.
-import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, askOf, counts }
+import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText }
   from './runs-view.js';
 
 const STATE_SOURCES = ['/api/state'];
@@ -245,6 +245,9 @@ async function openRunTerminal(runId, row) {
 function unitList(units, now) {
   const wrap = el('div', 'run-units');
   const w = unitWindow(units);
+  // Computed over the whole run, not the visible window: two units sharing a
+  // stamp pair may sit either side of the fold.
+  const batched = batchStamped(units);
 
   const renderUnit = (u) => {
     const line = el('div', `run-u${u.state === 'todo' ? '' : ` is-${u.state}`}`);
@@ -256,7 +259,7 @@ function unitList(units, now) {
     label.title = `${u.id} ${u.label} — ${u.state}`;
     line.append(label);
 
-    const d = durationOf(u, now);
+    const d = durationOf(u, now, batched);
 
     // A cluster on every unit that fanned out, so you can see that it did
     // without the agent names costing a row each.
@@ -287,7 +290,7 @@ function unitList(units, now) {
         const alabel = el('span', 'run-a-label', a.label);
         alabel.title = a.label;
         sub.append(alabel);
-        const ad = durationOf(a, now);
+        const ad = durationOf(a, now, null);
         const atn = el('span', ad.cls, ad.text);
         if (ad.why) atn.title = ad.why;
         sub.append(atn);
@@ -305,7 +308,10 @@ function unitList(units, now) {
 function runRow(r, now, expanded = true) {
   const st = runState(r);
   const nostamp = quietMs(r, now) === null;
-  const row = el('div', `run is-${st}${nostamp ? ' is-nostamp' : ''}`);
+  // `is-warn` marks a run that is working with something blocked. Without it
+  // the row is indistinguishable from ordinary work and the amber vocabulary
+  // used everywhere else for a block would not apply to it.
+  const row = el('div', `run is-${st}${blockedNote(r) ? ' is-warn' : ''}${nostamp ? ' is-nostamp' : ''}`);
 
   const top = el('div', 'run-top');
   const goal = el('span', 'run-goal', r.goal);
@@ -313,7 +319,7 @@ function runRow(r, now, expanded = true) {
   top.append(goal, el('span', 'run-proj', r.machine || ''));
   // stateText, not a hand-built string. build.js renders the same label and the
   // shared module exists so the two surfaces cannot drift apart on it.
-  top.append(el('span', 'run-state', stateText(r, now)));
+  top.append(el('span', 'run-state', stateText(r, now, r.session)));
   row.append(top);
 
   if (!expanded) {
@@ -364,26 +370,101 @@ function runRow(r, now, expanded = true) {
   return row;
 }
 
+/**
+ * A live session that is publishing nothing. One line: where it is and how long
+ * it has been up. Clicking focuses its terminal, the same as a run row.
+ *
+ * Only the pid crosses the wire. The server resolves the tty from the live
+ * process table and validates it, so the page can never hand a device path to
+ * osascript. Same rule as `run:`; see run-terminal.js.
+ */
+function sessionRow(s, now) {
+  const row = el('div', 'sess' + (s.context ? ' has-ctx' : ''));
+  const head = el('div', 'sess-head');
+  head.append(el('i', 'sess-dot'));
+  const label = el('span', 'sess-label', sessionText(s, now));
+  label.title = `${s.where || s.project} · pid ${s.pid} · ${s.tty}`;
+  head.append(label);
+  // IDLE, not NO STATUS, when we know what it last did. The two say different
+  // things: one is a session we have never heard from, the other is a session
+  // between pieces of work.
+  head.append(el('span', 'sess-tag', s.context ? 'IDLE' : 'NO STATUS'));
+  row.append(head);
+  if (s.context) {
+    const ctx = el('div', 'sess-ctx', s.context);
+    ctx.title = s.context;
+    row.append(ctx);
+  }
+  row.dataset.sessionPid = String(s.pid);
+  row.dataset.clickable = '';
+  row.title = `Open this session's terminal (${s.tty})`;
+  row.addEventListener('click', () => openSessionTerminal(s.pid, row));
+  return row;
+}
+
+async function openSessionTerminal(pid, row) {
+  const find = () => document.querySelector(`[data-session-pid="${CSS.escape(String(pid))}"]`) ?? row;
+  find().classList.add('busy');
+  let ok = false;
+  try {
+    const res = await fetch('/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Vault-Hud': '1' },
+      body: JSON.stringify({ id: `session:${pid}` }),
+    });
+    ok = res.ok;
+  } catch {
+    ok = false;
+  }
+  const live = find();
+  live.classList.remove('busy');
+  live.classList.add(ok ? 'hit' : 'miss');
+  setTimeout(() => find().classList.remove('hit', 'miss'), 900);
+}
+
 let runsSig = null;
 
-function renderRuns(runs) {
+function renderRuns(runs, sessions = []) {
   const now = Date.now();
   const needing = runs.filter((r) => runState(r) === 'needs-input').length;
   $('p-runs').classList.toggle('hot', needing > 0);
+  // Sessions are counted separately from runs. Folding them into one number
+  // would say "05 RUNS" when two of the five are publishing nothing, which is
+  // the overstatement this whole change exists to remove.
   $('runs-count').textContent =
-    `${pad2(runs.length)} RUNS` + (needing ? ` · ${pad2(needing)} NEEDS YOU` : '');
+    `${pad2(runs.length)} RUNS` +
+    (sessions.length ? ` · ${pad2(sessions.length)} QUIET` : '') +
+    (needing ? ` · ${pad2(needing)} NEEDS YOU` : '');
 
   // Rebuild only when something displayed actually changed. This render is
   // unguarded so quiet time keeps advancing, but replaceChildren tears down text
   // selection, and the whole point of the panel is a question you need to answer
   // and therefore copy. Signature includes the rendered state text, so a quiet
   // counter still ticks over, roughly once a minute instead of every 10 seconds.
-  const sig = runs.map((r) => rowSignature(r, now)).join('\n');
+  const sig = [
+    ...runs.map((r) => rowSignature(r, now)),
+    // Sessions carry a clock-derived uptime, so the bucket goes in the
+    // signature for the same reason unit timers do: without it the line freezes
+    // at whatever it first said.
+    ...sessions.map((s) => `${s.pid}${s.tty}${s.where}${sessionText(s, now)}`),
+  ].join('\n');
   if (sig !== runsSig) {
     runsSig = sig;
-    fill('runs-list', groupedRows(runs, now), 'NO RUN IS PUBLISHING STATUS');
+    const rows = groupedRows(runs, now);
+    if (sessions.length) {
+      // Below the runs, always. A session with no status is context for the
+      // board, not competition for it.
+      const head = el('div', 'repo-head');
+      head.append(el('span', 'repo-name', 'not reporting'));
+      head.append(el('span', 'rule-fill'));
+      head.append(el('span', 'repo-tally',
+        `${pad2(sessions.length)} ${sessions.length === 1 ? 'SESSION' : 'SESSIONS'}`));
+      rows.push(head);
+      for (const s of sessions) rows.push(sessionRow(s, now));
+    }
+    fill('runs-list', rows, 'NOTHING IS RUNNING');
   }
-  flashIfChanged($('p-runs'), runs);
+  flashIfChanged($('p-runs'), [runs, sessions]);
 }
 
 // Rank a repo by the worst thing inside it, so the group holding the run that
@@ -417,7 +498,7 @@ function groupedRows(runs, now) {
         (needing ? ` · ${pad2(needing)} NEEDS YOU` : '')));
       rows.push(head);
     }
-    for (const r of list.sort((a, b) => (URGENCY[runState(a)] ?? 9) - (URGENCY[runState(b)] ?? 9))) {
+    for (const r of list.sort((a, b) => sortRank(a) - sortRank(b))) {
       rows.push(runRow(r, now, expand.has(r.runId)));
     }
   }
@@ -891,7 +972,7 @@ function render(state) {
   // stops writing produces byte-identical State and a guard would freeze its
   // quiet time forever. fill() keeps scroll position, so an unguarded repaint
   // costs what every other panel already pays.
-  renderRuns(state.runs || []);
+  renderRuns(state.runs || [], state.sessions || []);
   renderLattice(state);
   renderWarnings(state);
   renderFooter(state);

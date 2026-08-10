@@ -128,6 +128,7 @@ presentation fields.
 | `GET /api/state` | The current State as JSON |
 | `GET /events` | SSE stream. One `data:` frame per vault change, plus a `:keepalive` comment every 25 s. |
 | `GET /api/metrics` | The last machine-vitals reading as JSON (a cache read — returns nulls until `/metrics` has had a subscriber). |
+| `GET /api/publish` | The last status-page publish attempt: when, whether it succeeded, and the error if not. `{"enabled":false}` unless `VAULT_HUD_PUBLISH=1`. |
 | `GET /metrics` | SSE stream of machine vitals. Sampling starts on the first subscriber and stops on the last. |
 | `GET /<file>` | Static files under the public root. Path traversal is rejected. |
 
@@ -337,6 +338,11 @@ check.js       verdicts over the claim index (supported / related / no evidence)
 mcp-vault.mjs  read-only MCP server exposing the three check tools
 shortcuts.js   the narrow command surface for the action bar
 metrics.js     macOS machine vitals sampler
+runs.js        15-Runs/ and 99-Archive/runs/ → validated run objects
+sessions.js    live agent sessions, read from the process table (ps + lsof)
+run-terminal.js  focus the Terminal tab a run or session occupies
+publish.js     rebuilds and redeploys the phone status page on a timer
+status-page/   the published phone board (build.js, deploy.sh); NOT Git-connected
 tools.json     shortcut-bar definitions (uses ${VAR} from .env)
 public/        the static frontend (index.html, app.js, hud.css, sw.js, icons)
 test/          node:test suites over a synthetic fixture vault

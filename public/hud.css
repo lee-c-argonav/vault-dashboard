@@ -571,7 +571,10 @@ body {
   overflow-wrap: anywhere;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
-.run.is-blocked .run-ask { color: var(--amber); }
+.run.is-blocked .run-ask,
+/* Same amber for a run that is working while something in it is blocked. Orange
+   is reserved for a question waiting on you; a block is not a question. */
+.run.is-warn .run-ask { color: var(--amber); }
 
 /* The unit list. This is the answer to "what is done and what is not", in words
    rather than as anonymous ticks. Windowed in app.js: a 28-unit run would
@@ -832,3 +835,72 @@ body {
   .link-state.live .lamp { animation: none; }
   .panel { transition: none; }
 }
+
+/* ── sessions with no run file ───────────────────────────────────────────── */
+
+/* A live agent session that publishes nothing. Deliberately the quietest row on
+   the panel: it carries one fact, that something is running here and not
+   reporting. Anything louder would compete with a run that has a real question
+   waiting on you, and that ranking is the whole point of the board.
+
+   The dot is --dimmer rather than any state colour, because "not reporting" is
+   an absence of state, not a fifth one. */
+.sess {
+  padding: 7px 16px;
+  border-bottom: 1px solid var(--rule);
+}
+.sess:last-child { border-bottom: 0; }
+.sess-head {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+/* What the session last published, when it published anything. A session
+   between pieces of work is not the same thing as one nobody has heard from,
+   and the bare row said the second about both. */
+.sess-ctx {
+  margin: 3px 0 0 14px;
+  font: 11px/1.4 var(--sans);
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sess-dot {
+  flex: 0 0 auto;
+  width: 5px; height: 5px;
+  align-self: center;
+  background: var(--dimmer);
+}
+.sess-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: 12px/1.4 var(--mono);
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sess-tag {
+  flex: 0 0 auto;
+  /* 10px, not 9px: nothing else on the panel sets type smaller, and this cell
+     carries a word rather than a number. */
+  font: 10px/1 var(--mono);
+  letter-spacing: .12em;
+  /* --text-3, never --dimmer. --dimmer is declared "marks and rules only, never
+     text" at the top of this file, and it measured 1.96:1 against --panel here
+     where --text-3 measures 3.85:1, which is the floor the rest of the panel
+     holds. Written as a review finding against this very block. */
+  color: var(--text-3);
+  border: 1px solid var(--rule-hot);
+  padding: 3px 5px;
+}
+.sess[data-clickable] { cursor: pointer; }
+.sess[data-clickable]:hover { background: var(--panel-2); }
+.sess[data-clickable]:hover .sess-label { color: var(--dim); }
+/* The run rows' vocabulary exactly, not a second one: dashed while in flight,
+   orange confirms, amber misses. A session row and a run row do the same thing
+   on click, so they must answer in the same language. */
+.sess.busy { outline: 1px dashed var(--dim); outline-offset: -1px; }
+.sess.hit  { outline: 1px solid var(--orange); outline-offset: -1px; }
+.sess.miss { outline: 1px solid var(--amber); outline-offset: -1px; }

@@ -18,6 +18,7 @@ import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readRuns } from './runs.js';
+import { readSessions } from './sessions.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.join(HERE, 'focus-terminal.applescript');
@@ -26,6 +27,27 @@ const SCRIPT = path.join(HERE, 'focus-terminal.applescript');
 const TTY_RE = /^\/dev\/tty[a-zA-Z0-9]{1,12}$/;
 
 export const RUN_PREFIX = 'run:';
+export const SESSION_PREFIX = 'session:';
+
+/**
+ * Focus the terminal of a live session that is publishing no run file.
+ *
+ * The page sends a pid and nothing else. The tty is looked up in the live
+ * process table by that pid and checked against TTY_RE before use, so the same
+ * rule holds as for `run:`: no device path supplied by the browser can ever
+ * reach osascript. A pid that is not a live agent session resolves to nothing.
+ */
+export async function focusSessionTerminal(id) {
+  const pid = Number(id.slice(SESSION_PREFIX.length));
+  if (!Number.isInteger(pid) || pid <= 0) return { ok: false, status: 400, error: 'bad pid' };
+
+  const sessions = await readSessions();
+  const session = sessions.find((s) => s.pid === pid);
+  // Gone since the page last rendered is the normal case, not an error worth a
+  // stack trace: the session may have exited seconds ago.
+  if (!session) return { ok: false, status: 404, error: 'no such live session' };
+  return focusTty(session.tty);
+}
 
 /**
  * @param {string} id  an action id of the form `run:<runId>`
@@ -55,14 +77,23 @@ export async function focusRunTerminal(id, vaultPath) {
     inferred = Boolean(tty);
   }
   if (!tty) return { ok: false, status: 404, error: 'no terminal recorded or inferable' };
-  if (!TTY_RE.test(tty)) return { ok: false, status: 400, error: 'not a tty path' };
+  return { ...(await focusTty(tty)), inferred };
+}
 
+/**
+ * The one place a tty reaches osascript. Every caller routes through here so the
+ * device-pattern check cannot be skipped by adding a second entry point, and the
+ * value arrives as an `on run argv` argument rather than spliced into script
+ * text or passed through a shell.
+ */
+async function focusTty(tty) {
+  if (!TTY_RE.test(tty)) return { ok: false, status: 400, error: 'not a tty path' };
   return new Promise((resolve) => {
     execFile('osascript', [SCRIPT, tty], { timeout: 5000 }, (err, stdout) => {
       if (err) return resolve({ ok: false, status: 500, error: 'osascript failed' });
       const result = String(stdout).trim();
       // notfound is a normal outcome, not a failure: the tab may be closed.
-      resolve({ ok: result === 'ok', status: result === 'ok' ? 200 : 404, result, tty, inferred });
+      resolve({ ok: result === 'ok', status: result === 'ok' ? 200 : 404, result, tty });
     });
   });
 }
@@ -80,20 +111,15 @@ async function inferTty(run) {
   if (!run.project) return '';
   const started = Date.parse(run.started);
 
-  const pids = await sh('pgrep', ['-x', 'claude']);
-  const candidates = [];
-  for (const pid of pids.split('\n').map((s) => s.trim()).filter(Boolean)) {
-    // `ps -o lstart=` so a tie can be broken on which session began first.
-    const info = await sh('ps', ['-o', 'tty=,lstart=', '-p', pid]);
-    const tty = info.trim().split(/\s+/)[0];
-    if (!tty || tty === '??') continue;
-    const cwd = (await sh('lsof', ['-a', '-p', pid, '-d', 'cwd', '-Fn']))
-      .split('\n').find((l) => l.startsWith('n'))?.slice(1) ?? '';
-    if (!cwd) continue;
-    if (cwd.split('/').pop() !== run.project) continue;
-    const begun = Date.parse(info.trim().slice(tty.length).trim());
-    candidates.push({ tty: `/dev/${tty}`, begun });
-  }
+  // sessions.js, not a second walk of the process table. This function used to
+  // spawn `pgrep` once plus `ps` and `lsof` per pid, which is 1 + 2n processes
+  // for a result sessions.js already has cached from the last vault parse. Two
+  // readers of the same table also means two places to fix when the shape of it
+  // changes, which is the divergence ERRORS.md records for the two renderers.
+  const candidates = (await readSessions())
+    .filter((s) => s.project === run.project)
+    .map((s) => ({ tty: s.tty, begun: Date.parse(s.since) }));
+
   if (!candidates.length) return '';
   if (candidates.length === 1) return candidates[0].tty;
 
@@ -105,10 +131,4 @@ async function inferTty(run) {
   // No usable start stamp means no way to tell two sessions in the same repo
   // apart. Raising an arbitrary one is worse than raising none.
   return before[0] ? before[0].tty : '';
-}
-
-function sh(cmd, args) {
-  return new Promise((resolve) => {
-    execFile(cmd, args, { timeout: 3000 }, (err, stdout) => resolve(err ? '' : String(stdout)));
-  });
 }

@@ -5,7 +5,9 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { readRuns } from './runs.js';
+import { readRunsDetailed } from './runs.js';
+import { partitionRuns, linkSessions, sessionContext } from './public/runs-view.js';
+import { readSessions } from './sessions.js';
 
 const SCANNED_DIRS = [
   '00-Inbox', '10-Projects', '20-Research', '30-Reading',
@@ -231,6 +233,38 @@ export default async function parseVault(vaultPath) {
   const today = localISODate(now);
   const warnings = [];
 
+  // Read the runs early so anything wrong with them lands in `warnings` with
+  // every other parse complaint. Both of these used to be silent: an unreadable
+  // 15-Runs looked exactly like a vault with no runs, and a run file the reader
+  // could not use was counted into a local variable and discarded (the KNOWN
+  // GAP that stood in runs.js until 2026-08-10). A run that never appears with
+  // nothing on screen explaining why is the worst failure this panel has.
+  const runsDetail = await readRunsDetailed(root);
+  const runsRead = partitionRuns(runsDetail.runs);
+  // Which sessions are actually alive, and which of them are telling nobody.
+  // A run file is the only thing that ever put a session on this board, and
+  // writing one is opt-in, so most sessions appeared nowhere. Observed liveness
+  // is the floor under that.
+  const linked = linkSessions(runsRead.active, await readSessions());
+  // A session with no live run may still have published one that just finished.
+  // Without this the best-described session on the board becomes the emptiest
+  // row on it the moment its work completes.
+  const sessionsOut = linked.unpublished.map((s) => ({
+    // linked.runs, not the raw read: the guard in sessionContext keys on
+    // `.session`, which only exists after linking.
+    ...s, context: sessionContext(s, linked.runs.concat(
+      runsDetail.runs.filter((r) => r.state === 'done')), now.getTime()),
+  }));
+  if (runsDetail.unreadable) {
+    warnings.push(`cannot read ${path.join(root, '15-Runs')} — no run can appear`);
+  }
+  if (runsDetail.skipped) {
+    warnings.push(
+      `${runsDetail.skipped} run ${runsDetail.skipped === 1 ? 'file is' : 'files are'} ` +
+      'unreadable or missing a runId, and cannot be shown',
+    );
+  }
+
   const obsidianUrl = (noteId) =>
     `obsidian://open?vault=${encodeURIComponent(vaultName)}&file=${encodeURIComponent(noteId)}`;
 
@@ -373,7 +407,13 @@ export default async function parseVault(vaultPath) {
       .sort((a, b) => b.date.localeCompare(a.date) || a.source.localeCompare(b.source))
       .slice(0, MAX_DECISIONS),
     graph: { nodes, edges },
-    runs: await readRuns(root),
+    // Only live runs reach the desktop panel. A finished run used to stay on it
+    // until a session remembered to move its file, and on 2026-08-08 one did
+    // not, so a done run held a slot for two days. History is the phone page's
+    // job; the desktop is a now instrument.
+    runs: linked.runs,
+    // Live sessions that are publishing nothing. One line each; see sessions.js.
+    sessions: sessionsOut,
     health: {
       notes: notes.length,
       links: linkCount,

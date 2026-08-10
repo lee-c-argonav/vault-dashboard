@@ -12,7 +12,8 @@ import { fileURLToPath } from 'node:url';
 import parseVault from './parse.js';
 import { loadShortcuts, publicShortcuts, runShortcut } from './shortcuts.js';
 import { startMetrics, stopMetrics, currentMetrics } from './metrics.js';
-import { focusRunTerminal, RUN_PREFIX } from './run-terminal.js';
+import { focusRunTerminal, focusSessionTerminal, RUN_PREFIX, SESSION_PREFIX } from './run-terminal.js';
+import { startPublishing, stopPublishing, publishStatus } from './publish.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -73,6 +74,10 @@ function bootState() {
     rolledOver: [],
     decisions: [],
     graph: { nodes: [], edges: [] },
+    // Present before the first parse, so app.js never reads undefined off the
+    // boot state and every consumer sees one shape.
+    runs: [],
+    sessions: [],
     health: {
       notes: 0,
       links: 0,
@@ -289,6 +294,16 @@ function handleAction(req, res) {
       });
       return;
     }
+    // `session:<pid>` focuses a live session that is publishing no run file.
+    // Same rule as above: the page sends an id, run-terminal.js resolves the
+    // tty from the process table and validates it before it reaches osascript.
+    if (id.startsWith(SESSION_PREFIX)) {
+      focusSessionTerminal(id).then((result) => {
+        send(res, result.ok ? 200 : (result.status ?? 500), JSON.stringify(result),
+          'application/json; charset=utf-8');
+      });
+      return;
+    }
     const result = runShortcut(id);
     send(res, result.ok ? 200 : (result.status ?? 500), JSON.stringify(result),
       'application/json; charset=utf-8');
@@ -323,6 +338,9 @@ const server = createServer((req, res) => {
   }
   if (urlPath === '/api/state') {
     return send(res, 200, currentJson, 'application/json; charset=utf-8');
+  }
+  if (urlPath === '/api/publish') {
+    return send(res, 200, JSON.stringify(publishStatus()), 'application/json; charset=utf-8');
   }
   if (urlPath === '/api/metrics') {
     return send(res, 200, JSON.stringify(currentMetrics()), 'application/json; charset=utf-8');
@@ -422,6 +440,7 @@ function shutdown(signal) {
   clearTimeout(retryTimer);
   watcher?.close();
   stopMetrics();
+  stopPublishing();
   for (const res of clients) res.end();
   clients.clear();
   for (const res of metricClients) res.end();
@@ -445,8 +464,21 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (err) => {
   process.stderr.write(`[vault-hud] unhandled rejection: ${err?.stack ?? err}\n`);
 });
+// A server that cannot hold the port can never serve anything, so it dies
+// rather than log and continue. Observed 2026-08-10: two daemons were running,
+// one holding :5959 and one holding no socket at all. The second had been up
+// three days and twenty-three hours, burning twelve minutes of CPU re-parsing
+// the whole vault every ten seconds for nobody, and writing into the same log
+// file as the real one. Logging and continuing is right for a parse failure,
+// where the window degrades to stale data; it is wrong here, where there is no
+// window left to degrade.
 server.on('error', (err) => {
   process.stderr.write(`[vault-hud] server error: ${err?.stack ?? err}\n`);
+  if (err?.code === 'EADDRINUSE' || err?.code === 'EACCES') {
+    process.stderr.write(
+      `[vault-hud] cannot hold ${HOST}:${PORT} (${err.code}); another instance owns it. Exiting.\n`);
+    process.exit(1);
+  }
 });
 
 // The vault can sit untouched across midnight, and `today` plus every
@@ -477,9 +509,20 @@ safetyRefresh.unref();
 const parseMs = await refresh();
 const shortcutCount = await loadShortcuts();
 startWatcher();
+
 server.listen(PORT, HOST, () => {
+  // Publishing starts only once the port is genuinely held.
+  //
+  // It ran before listen() at first, which meant a SECOND daemon started while
+  // one already owned :5959 would spawn deploy.sh and push to Vercel, and only
+  // then hit EADDRINUSE and exit — and process.exit does not reap the bash and
+  // vercel children it had already spawned, so the upload completed from a
+  // daemon that no longer existed. That is the duplicate-daemon case the exit
+  // guard above was added for, arriving through a door beside it.
+  const publishing = startPublishing((line) => process.stderr.write(line));
   process.stdout.write(
     `[vault-hud] http://${HOST}:${PORT} · vault ${VAULT} · ` +
-      `${current.health.notes} notes · ${shortcutCount} shortcuts · parsed in ${parseMs.toFixed(1)}ms\n`
+      `${current.health.notes} notes · ${shortcutCount} shortcuts · ` +
+      `publish ${publishing ? 'on' : 'off'} · parsed in ${parseMs.toFixed(1)}ms\n`
   );
 });

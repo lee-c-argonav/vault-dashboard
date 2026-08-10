@@ -9,7 +9,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readRuns } from '../runs.js';
-import { runState, isQuiet, eta, quietMs } from '../public/runs-view.js';
+import { runState, isQuiet, eta, quietMs, askOf, unitWindow } from '../public/runs-view.js';
 
 const T0 = Date.parse('2026-08-06T14:00:00.000Z');
 const min = (n) => n * 60_000;
@@ -84,8 +84,11 @@ test('a wide spread gives a band centred on the mean, one sd either side', () =>
 });
 
 test('the band never goes negative', () => {
+  // Distinct stamps on every unit, deliberately. Two units sharing an exact
+  // start and end are one measurement copied, which `eta` now excludes, and the
+  // point of this fixture is a wide spread rather than a duplicate pair.
   const d = (a, b) => ({ state: 'done', started: iso(a), ended: iso(b) });
-  const e = eta([d(T0, T0 + min(1)), d(T0, T0 + min(1)), d(T0, T0 + min(120)),
+  const e = eta([d(T0, T0 + min(1)), d(T0 + min(2), T0 + min(3)), d(T0 + min(4), T0 + min(124)),
                  { state: 'todo' }]);
   assert.ok(e.low >= 0);
 });
@@ -154,4 +157,67 @@ test('no derived field in a run changes with the clock', async () => {
   const b = JSON.stringify(await readRuns(root));
   assert.equal(a, b);  // State must be stable, or app.js repaints on every tick
   await rm(root, { recursive: true, force: true });
+});
+
+// ── `blocked` as a unit state ────────────────────────────────────────────────
+//
+// runs.js has always admitted `blocked` into UNIT_STATES, and until 2026-08-10
+// no reader branched on it: runState escalated on `failed` only, unitWindow
+// pivoted on `failed` then `running`, and askOf named failed units only. The
+// live consequence was a run whose unit "the visual review, waiting on you" sat
+// blocked while the row read RUNNING and the unit itself was hidden behind
+// "+31 earlier". Something waiting on the operator was invisible on both
+// surfaces. These tests exist so it cannot go quiet again.
+
+test('a blocked unit blocks the run, exactly as a failed one does', () => {
+  const r = base({ units: [{ id: '1', label: 'a', state: 'blocked' }] });
+  assert.equal(runState(r), 'blocked');
+});
+
+test('an explicit blockers entry still outranks a blocked unit as the reason', () => {
+  const r = base({
+    blockers: [{ what: 'the release gate needs a key', since: iso(T0) }],
+    units: [{ id: '1', label: 'a', state: 'blocked' }],
+  });
+  assert.equal(runState(r), 'blocked');
+  assert.match(askOf(r, T0 + min(30)), /release gate needs a key/);
+});
+
+test('askOf names the blocked unit when nothing else explains the block', () => {
+  const r = base({ units: [{ id: '4', label: 'the visual review', state: 'blocked' }] });
+  assert.match(askOf(r, T0), /Unit 4 blocked: the visual review/);
+});
+
+test('askOf counts them when several units are blocked', () => {
+  const r = base({ units: [
+    { id: '4', label: 'a', state: 'blocked' },
+    { id: '5', label: 'b', state: 'blocked' },
+  ] });
+  assert.match(askOf(r, T0), /2 units blocked: 4, 5/);
+});
+
+test('a failed unit is still named ahead of a blocked one', () => {
+  const r = base({ units: [
+    { id: '4', label: 'the visual review', state: 'blocked' },
+    { id: '5', label: 'the gate', state: 'failed' },
+  ] });
+  assert.match(askOf(r, T0), /Unit 5 failed: the gate/);
+});
+
+test('the unit window pivots onto a blocked unit rather than hiding it', () => {
+  // Twelve units with the blocked one early: without a pivot it falls outside
+  // the window and the run states a reason the reader cannot see.
+  const units = Array.from({ length: 12 }, (_, i) =>
+    ({ id: String(i), label: `u${i}`, state: i === 1 ? 'blocked' : 'done' }));
+  const w = unitWindow(units);
+  assert.ok(w.visible.some((u) => u.state === 'blocked'),
+    'the unit that explains the row must be inside the window');
+});
+
+test('a failed unit still outranks a blocked one for the pivot', () => {
+  const units = Array.from({ length: 12 }, (_, i) =>
+    ({ id: String(i), label: `u${i}`,
+       state: i === 1 ? 'blocked' : i === 9 ? 'failed' : 'done' }));
+  const w = unitWindow(units);
+  assert.ok(w.visible.some((u) => u.state === 'failed'));
 });

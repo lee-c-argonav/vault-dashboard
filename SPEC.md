@@ -147,13 +147,30 @@ The single contract between `parse.js`, `server.js`, and `app.js`.
   // JSON.stringify diff and the server rebroadcasts on a timer, so a "quiet for
   // Nm" field here would make every broadcast look changed. Liveness is derived
   // in public/runs-view.js instead, which both the HUD and the phone page import.
+  // LIVE runs only. A run with `state: "done"` is dropped here and appears in the
+  // phone page's history section instead; see "Finished runs" below.
   "runs": [
     { "runId": "widget-20260806-1432", "project": "widget", "goal": "Widget goal",
       "machine": "laptop", "state": "running", "note": "One plain sentence.",
       "started": "2026-08-06T14:32:00.000Z", "updated": "2026-08-06T15:04:00.000Z",
+      // When the file was last written, from the filesystem. Liveness is derived
+      // from THIS, not from `updated`; see "Liveness" below.
+      "wrote": "2026-08-06T15:04:02.117Z",
       "units": [ /* Unit */ ],
       "needsInput": [ { "question": "…", "since": "…" } ],
-      "blockers": [ { "what": "…", "since": "…" } ] }
+      "blockers": [ { "what": "…", "since": "…" } ],
+      // The live session this run is executing in, or null. Observed, not
+      // declared; see "Sessions" below.
+      "session": { "pid": 501, "tty": "/dev/ttys002",
+                   "project": "widget", "where": "work/widget",
+                   "since": "2026-08-06T14:30:00.000Z" } }
+  ],
+
+  // Live agent sessions that are publishing NO run file. One line each on both
+  // surfaces. See "Sessions" below for why this is observed rather than declared.
+  "sessions": [
+    { "pid": 502, "tty": "/dev/ttys003", "project": "sprocket",
+      "where": "work/sprocket", "since": "2026-08-09T19:33:40.000Z" }
   ],
 
   "health": {
@@ -175,14 +192,72 @@ A run's own `state` is `running`, `paused` or `done`. A unit's `state` is `todo`
 `running`, `done`, `blocked` or `failed`.
 
 **There is no `stale` value and no writer ever sets one.** A run that crashed
-cannot write that it crashed, so liveness is inferred from `updated` by
-`public/runs-view.js` and shown as quiet time alongside whatever state the run
-was last in. `NEEDS YOU · QUIET 1h04m` is a run that asked a question and then
+cannot write that it crashed, so liveness is inferred by `public/runs-view.js`
+and shown as quiet time alongside whatever state the run was last in.
+
+It is inferred from `wrote`, the file's mtime, rather than from the `updated`
+stamp the writing agent generates. mtime is a direct measurement and cannot be
+skewed by that agent's clock; `60-Standards/run-status.md` documents clock skew
+as a recurring writer failure, and a mistake the spec has to warn about is one
+the reader should not depend on. Measured 2026-08-10: a run written at 19:07:10Z
+claimed `updated: 17:21:00Z`, so the board reported 2h46m of silence against a
+true 1h05m. `updated` is still carried and is now checked against `wrote`; a gap
+beyond a minute renders as `STAMPS 1h46m BEHIND`, because every duration derived
+from that stamp is wrong by the same amount and only the writer can fix it.
+
+The one way this misleads: anything that rewrites a run file without the run
+writing it (a checkout, an rsync) resets mtime and makes a dead run look recent.
+That is rarer and more visible than the clock skew it replaces. `NEEDS YOU · QUIET 1h04m` is a run that asked a question and then
 died; collapsing that into a single `stale` state would hide the question.
 
 `started`/`ended` on completed units are what make the ETA measured. A completed
 unit missing either is invisible to the estimate, and the estimate is suppressed
 entirely below three samples.
+
+A unit that is `blocked` blocks its run, exactly as a `failed` one does, and
+`askOf` names it when no `blockers[]` entry explains the row. Until 2026-08-10 no
+reader branched on `blocked` at all, so a unit could sit blocked and waiting on
+the operator while its run reported RUNNING and the unit itself fell outside the
+displayed window.
+
+### Sessions
+
+`sessions` holds live agent sessions that are publishing no run file, read from
+the process table by `sessions.js` and matched against the runs by `linkSessions`.
+
+This exists because publishing is opt-in: a session only appears on the board if
+it chose to write a file, so most sessions appeared nowhere. Measured 2026-08-10,
+four were running on the machine and one was on the board. A run file still says
+everything useful about a session and a session that writes one gets a full row;
+what this adds is the floor, so "nothing is reporting" and "nothing is running"
+stop looking identical.
+
+A run claims a session by recorded `tty` first, then by `project` matching the
+session's working directory when the session is older than the run. One session
+per run, so two sessions in one repo with one run between them leaves one on this
+list, which is the true statement. A `done` run claims nothing.
+
+No absolute path ever reaches State. `where` is relative to `$HOME` and is empty
+for a directory outside it, leaving only `project`, the single leaf segment. The
+phone page is served to an unauthenticated GET, so this is a publication boundary
+rather than a display preference.
+
+Sampling costs two child processes, one `ps` and one batched `lsof`, measured
+together at about 90ms for four sessions, and is cached for 5s so the 10s vault
+parse does not pay it twice.
+
+### Finished runs
+
+A run leaves the live board when its own `state` is `done`, never when its file
+moves. `/close` still archives finished runs to `99-Archive/runs/` and that is
+still worth doing, but it is tidying: on 2026-08-08 a close set the state and
+skipped the move, and the finished run held a slot on both surfaces for two days.
+Board correctness must not depend on a step an agent might not run.
+
+`partitionRuns` splits live from finished for both surfaces, and the phone page's
+history section reads `15-Runs/` and `99-Archive/runs/` together, newest first. An
+archived run is reported `done` whatever its file says, because being archived is
+the stronger statement.
 
 The write contract lives in the vault at `60-Standards/run-status.md`.
 

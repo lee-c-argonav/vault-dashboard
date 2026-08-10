@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Rebuild and republish the phone status page on a timer.
+
+  WHY A TIMER. Publishing used to be a step inside `/close`, which meant the
+  page was only as fresh as the last time a session remembered to run it, and
+  it silently published an empty board for four days without anyone noticing
+  (see status-page/deploy.sh, and the 2026-08-10 entry in ERRORS.md). A page
+  that goes stale between closes is a page you cannot trust to answer "what is
+  running", which is the only question it exists to answer.
+
+  StartInterval is 300 seconds. The deploy costs one build plus one Vercel
+  upload, and a five-minute floor on how stale the page can be is well inside
+  what a phone check needs. Runs update on the desktop instantly either way;
+  this is only the published copy.
+
+  ThrottleInterval matches, so a fast-failing deploy cannot spin.
+
+  Template. launchd carries no environment and needs absolute paths, so replace
+  every /ABSOLUTE/PATH/TO placeholder and the $HOME log paths with real values
+  before installing. `which bash` and `which node` give the two binaries.
+  See launchd/README.md.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>local.vault-hud-status</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/ABSOLUTE/PATH/TO/vault-hud/status-page/deploy.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/ABSOLUTE/PATH/TO/vault-hud</string>
+    <!-- launchd starts with almost no PATH, and deploy.sh needs `vercel` and
+         `node`. Without this the job fails every five minutes with "vercel CLI
+         not installed" and the page never moves. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/YOU/Library/Logs/vault-hud-status.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOU/Library/Logs/vault-hud-status.log</string>
+    <key>StartInterval</key>
+    <integer>300</integer>
+    <key>ThrottleInterval</key>
+    <integer>300</integer>
+    <!-- RunAtLoad so installing it publishes immediately rather than in five
+         minutes, which is also how you find out the paths are wrong. -->
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
