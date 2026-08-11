@@ -25,6 +25,7 @@ import {
   eta, etaText, elapsedText, humanMs, counts, partitionRuns, linkSessions, batchStamped,
   STALE_MS,
   sessionContext, sortRank, blockedNote, FINISHED_MAX_AGE_MS, agentEta,
+  attentionModel, attentionCaption,
 } from '../public/runs-view.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -445,6 +446,12 @@ body{
 .n{font:40px/.95 var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.04em;
    color:var(--orange);margin:0 0 26px}
 .n.calm{color:var(--bone)}
+/* The census under the headline: demand kinds first, then what is in flight.
+   Negative top margin tucks it under .n without touching .n's own spacing,
+   because the line is absent on an empty board and .n must sit the same
+   either way. */
+.acap{margin:-18px 0 26px;font:11px/1.6 var(--mono);letter-spacing:.08em;
+      text-transform:uppercase;color:var(--dim)}
 
 .repo{font:10px/1 var(--mono);letter-spacing:.18em;text-transform:uppercase;
       color:var(--dim);margin:26px 0 10px;display:flex;gap:10px;align-items:center}
@@ -761,7 +768,14 @@ export async function build(opts = {}) {
   const { active, finished, unpublished, skipped } =
     toPublicBoard(await readBoard(vault, opts.sessions, now), now);
 
-  const needing = active.filter((r) => runState(r) === 'needs-input').length;
+  // The same census the desktop's ATTN instrument renders, computed from the
+  // PROJECTION, so it can only hold what the allowlist lets through: state
+  // words and counts. The headline used to count needs-input runs only, which
+  // hid a blocked run and a stalled session — the page stayed calm about the
+  // two situations it exists to surface. Demand is all three kinds: runs
+  // asking, runs blocked, sessions claiming to work and writing nothing.
+  const att = attentionModel({ runs: active, sessions: unpublished });
+  const demand = att.demandCount;
   const expand = expandSet(active);
 
   // Group by repo, worst urgency first, exactly as the HUD does.
@@ -811,8 +825,11 @@ export async function build(opts = {}) {
 <meta name="apple-mobile-web-app-title" content="Runs">
 <title>Run status</title>
 <style>${CSS}${TOKENS}</style>
-<p class="k">${needing ? 'Needs you' : 'Active runs'}</p>
-<p class="n${needing ? '' : ' calm'}">${String(needing || active.length).padStart(2, '0')}</p>
+<p class="k">${demand ? 'Needs attention' : 'Active runs'}</p>
+<p class="n${demand ? '' : ' calm'}">${String(demand || active.length).padStart(2, '0')}</p>
+${attentionCaption(att)
+    ? `<p class="acap">${esc(attentionCaption(att))}</p>`
+    : ''}
 ${(active.length || unpublished.length) ? `<div class="legend" role="group" aria-label="State and duration key">
   <span><i class="is-running"></i>running</span>
   <span><i class="is-blocked"></i>blocked</span>

@@ -6,7 +6,7 @@
 // Both import it so the two surfaces cannot disagree about whether a run is
 // waiting on you. Liveness lives here, not in State: State is diffed by
 // stringify below, so a clock-derived field would look changed on every push.
-import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText, sessionActivity, mergedRank, loadModel, loadCaption, agentEta }
+import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText, sessionActivity, mergedRank, attentionModel, attentionCaption, agentEta }
   from './runs-view.js';
 
 const STATE_SOURCES = ['/api/state'];
@@ -107,20 +107,19 @@ function renderHeader(state) {
   $('h-date').textContent = state.today;
   $('h-day').textContent = state.todayLabel;
 
-  // Read from the load model, so the header and the gauge can never disagree
-  // about how many sessions are alive.
+  // Read from the attention model, so the header and the gauge can never
+  // disagree about how many sessions are alive.
   //
   // RUNS, SESSIONS and AGENTS are volume and stay neutral however large they get:
   // eight agents working is not a problem. STALLED and NEEDS YOU go orange the
   // moment they are non-zero, because both mean something has stopped.
-  const load = loadModel(state, Date.now());
-  const term = (k) => load.terms.find((t) => t.key === k)?.count ?? 0;
+  const att = attentionModel(state);
   const cells = [
     ['s-runs', (state.runs ?? []).length, false],
-    ['s-sessions', term('session'), false],
-    ['s-agents', term('fanout'), false],
-    ['s-stalled', term('stalled'), true],
-    ['s-needs', term('needsYou'), true],
+    ['s-sessions', att.counts.sessions, false],
+    ['s-agents', att.counts.agentsOut, false],
+    ['s-stalled', att.counts.stalled, true],
+    ['s-needs', att.counts.needsYou, true],
   ];
   for (const [id, value, hotWhenSet] of cells) {
     const node = $(id);
@@ -150,44 +149,57 @@ function renderFocus(state) {
   }
   $('focus-src').textContent = `40-DAILY/${state.today}`;
 
-  // The load gauge. One segment per contributing term, width proportional to the
-  // attention units it contributes, heaviest first. See loadModel in runs-view.js
-  // for the equation and the reasoning behind every weight.
+  // The attention census. One discrete mark per real thing, demand left of the
+  // divider and flight right of it — never one bar summing both, because the
+  // sum was large on the healthiest board this machine shows (LOAD 70 from
+  // three working sessions, measured 2026-08-11) and on the worst (100 from
+  // the same three stalled). See attentionModel in runs-view.js for the full
+  // model and what it replaced.
   //
-  // Composed rather than totalled, because a bare number is not actionable: "load
-  // is 63" says nothing you can do, and "3 of that is a run waiting on you" says
-  // exactly what to do next. The previous version was one tick per open todo, 78
-  // of them, which measured a queue nobody was working from.
-  const load = loadModel(state, Date.now());
+  // Discrete marks rather than proportional segments: a weighted segment's
+  // width could not be read back to a count (a wide one might be three repos
+  // or one question), while marks are countable at a glance and the colour
+  // says which kind. The number beside the strip is the demand count — things
+  // stopped on a human — which is the one figure with an action in it.
+  const att = attentionModel(state);
   const n = $('load-n');
-  n.textContent = String(Math.round(load.pct));
-  n.classList.toggle('over', load.over);
-  n.title = `${load.score.toFixed(1)} of ${load.capacity} attention units\n`
-    + load.terms.map((t) => `${t.label}: ${t.count} × ${t.weight}`
-      + `${t.key === 'fanout' ? ' (√, supervision is sublinear)' : ''}`
-      + ` = ${t.points.toFixed(2)}`).join('\n');
+  n.textContent = pad2(att.demandCount);
+  n.classList.toggle('hot', att.demandCount > 0);
+  n.title = att.demandCount
+    ? `${att.demandCount} stopped on a human: `
+      + att.demand.map((t) => `${t.count} ${t.label.toLowerCase()}`).join(', ')
+    : 'Nothing is stopped waiting on a human';
 
+  // The census stays readable past subitizing by stopping, not shrinking: 16
+  // marks × 8px is 128px against a ≥300px track, and beyond that the number
+  // and the caption are the instrument — the counts stay exact there while a
+  // 20th mark adds nothing a glance can use.
+  const MARK_CAP = 16;
+  const mark = (cls, title) => {
+    const m = el('i', `mk is-${cls}`);
+    m.title = title;
+    return m;
+  };
   const strip = $('load-strip');
-  strip.replaceChildren(...load.terms.map((t) => {
-    const seg = el('i', `seg is-${t.cls}`);
-    // Percent of CAPACITY, so the bar's empty tail is real headroom rather than
-    // a normalisation that always fills.
-    // Normalised by whichever is larger, the score or the capacity. Against
-    // capacity alone the widths summed past 100% the moment load exceeded it —
-    // measured at 337% on a saturated board — and with flex:0 0 auto and
-    // overflow:hidden the first segment filled the track and every other segment
-    // was clipped out of existence. A solid bar and the number 100 is precisely
-    // the uncomposed total this gauge was built to replace.
-    seg.style.width = `${(100 * t.points) / Math.max(load.score, load.capacity)}%`;
-    seg.title = `${t.label}: ${t.count} × ${t.weight} = ${t.points.toFixed(2)} of ${load.capacity}`;
-    return seg;
-  }));
-  strip.classList.toggle('over', load.over);
-  $('load-cap').textContent = loadCaption(load) || 'nothing running';
-  // The gauge's composition, not a todo count. Points are rounded so the panel
-  // does not flash on a sub-integer drift in the fan-out square root.
-  flashIfChanged($('p-focus'), [state.focus, Math.round(load.score * 10),
-    load.terms.map((t) => `${t.key}${t.count}`).join(',')]);
+  const kids = [];
+  for (const t of att.demand) {
+    for (let i = 0; i < t.count && kids.length < MARK_CAP; i += 1) {
+      kids.push(mark(t.cls, `${t.count} ${t.label}`));
+    }
+  }
+  const f = att.flight;
+  if (kids.length && f.sessions) kids.push(el('i', 'load-div'));
+  for (let i = 0; i < Math.min(f.sessions, MARK_CAP); i += 1) {
+    kids.push(mark('live', `${f.sessions} session${f.sessions === 1 ? '' : 's'} working`));
+  }
+  strip.replaceChildren(...kids);
+  $('load-cap').textContent = attentionCaption(att) || 'nothing running';
+  // Everything this panel renders derives from these counts, so the flash
+  // signature is exactly them: number, marks and caption cannot change without
+  // moving one.
+  flashIfChanged($('p-focus'), [state.focus,
+    att.demand.map((t) => `${t.key}${t.count}`).join(','),
+    f.sessions, f.contexts, f.agentsOut]);
 }
 
 // ── hero: the one number that says what is wrong ──────────────────────────────

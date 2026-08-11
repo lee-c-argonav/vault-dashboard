@@ -128,12 +128,20 @@
     <div class="pbody focus-body">
       <p class="focus-eyebrow" id="focus-eyebrow"></p>
       <p class="focus-text" id="focus-text">—</p>
+      <!-- The attention census. The number is how many things are stopped on a
+           human; the strip is one mark per thing, demand before the divider,
+           working sessions after it. Ids keep the load- prefix: the slot is the
+           same, the instrument in it changed. -->
+      <!-- One line, not two. With the capacity track gone the marks are only as
+           wide as there is something to say, so the caption sits beside them and
+           the row reads as a single statement: how much is stopped on you, the
+           marks that make up the census, and what they are. -->
       <div class="load">
-        <span class="load-k">LOAD</span>
+        <span class="load-k">ATTN</span>
         <span class="load-n" id="load-n">--</span>
         <div class="load-strip" id="load-strip"></div>
+        <p class="load-cap" id="load-cap"></p>
       </div>
-      <p class="load-cap" id="load-cap"></p>
     </div>
   </section>
 

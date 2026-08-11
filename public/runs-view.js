@@ -100,8 +100,9 @@ const isBlocked = (u) => u.state === 'blocked';
 const isFailed = (u) => u.state === 'failed';
 
 export function runState(run) {
-  // Guarded here rather than at one call site. loadModel wrapped this in a
-  // try/catch with a comment claiming the panel was protected; it protected one
+  // Guarded here rather than at one call site. The load gauge (now
+  // attentionModel) wrapped this in a try/catch claiming the panel was
+  // protected; it protected one
   // of six call sites, and the other five reach it unguarded from renderRuns,
   // which has no catch above it — so one half-shaped run for one tick would take
   // down the whole window and every refresh after it.
@@ -258,110 +259,159 @@ export function linkSessions(runs, sessions) {
 }
 
 /**
- * What the LOAD gauge measures, and the equation behind it.
+ * What the ATTENTION instrument measures, and why it is a census and not a sum.
  *
- * WHAT IT REPLACED. One 2px tick per open todo, oldest first — 78 of them on this
- * machine. That is a count of a queue, not a measure of load: it did not move when
- * five agents started working, it did not move when a run stopped and waited for an
- * answer, and it could not distinguish a quiet day with a long backlog from a
- * saturated one. It also predated the panel's change of subject to agent runs.
+ * TWO GAUGES PRECEDED IT, both replaced for the same defect: one number built
+ * from quantities the operator cannot act on.
  *
- * WHAT LOAD MEANS HERE: how much is demanding attention right now. The unit is one
- * ATTENTION UNIT — roughly, one thing you would have to look at. Every term is a
- * count of a real thing multiplied by how much of your attention one of them takes.
+ * The first was one 2px tick per open todo — 78 of them on this machine. It
+ * measured a queue nobody worked from: it did not move when five agents started
+ * working, and did not move when a run stopped to ask a question. The todo
+ * system is not in use and stays out of this instrument in any form.
  *
- *     LOAD = Σ (count × weight)          measured in attention units
- *     GAUGE = min(100, 100 × LOAD / CAPACITY)
+ * The second was a weighted sum against a capacity:
  *
- * The weights are a judgment and are stated rather than hidden, so they can be
- * argued with and retuned. Their ordering is the defensible part:
+ *     LOAD = 3·needsYou + 2·blocked + 2·stalled + 1·context + 0.5·session
+ *            + 0.75·√agentsOut,   GAUGE = min(100, 100 · LOAD / 8)
  *
- *   needsYou  3     work is STOPPED and only you can restart it. Nothing outranks it.
- *   blocked   2     stopped on something; may or may not be yours to clear.
- *   stalled   2     a process claiming to work and writing nothing. Needs a look.
- *   context   1     each distinct project in flight is a context switch, which is
- *                   the cost people consistently underestimate.
- *   session   0.5   a live thread that is running fine. Real, but light.
- *   fanout    0.75  × SQRT of agents out, not the count. Supervision is sublinear:
- *                   you attend to the batch, so 36 agents is six units and not
- *                   thirty-six. Without the root, one fan-out drowns every other term.
+ * Measured on the live board, 2026-08-11: three sessions all working, nothing
+ * waiting on the operator, and it read LOAD 70. The same three sessions all
+ * STALLED reads 100. The healthiest board this machine shows and the worst one
+ * both push the number UP, thirty points apart on a hundred-point scale, and
+ * which situation you are in lived only in the caption. Adding "work running
+ * fine" to "work stopped on a human" is the defect: the sum is large in the
+ * best case and the worst, so the number alone was never actionable. The
+ * denominator was the other defect — CAPACITY = 8 was never measured against
+ * anything, so the percent claimed a rigor it did not have, and nothing the
+ * operator does differs at 66 versus 41.
  *
- * NO TODO TERM. Overdue and due-today were in the first version and came out at
- * The operator's call: the todo system is not in use, so counting it manufactured
- * load nobody was carrying — six overdue items were the single largest term on a live
- * board, outweighing three working sessions. This also settles the inconsistency
- * the project hub has recorded since 2026-08-06, where the panel changed subject to
- * agent runs and its gauges stayed todo-driven.
+ * THE MODEL NOW: two populations, never added, because they mean opposite
+ * things.
  *
- * CAPACITY is 8 attention units — a full plate. Past it the gauge pegs, because a
- * bar that keeps growing stops being readable exactly when it matters most.
+ *   DEMAND — things stopped on a human. A run asking a question, a run
+ *   blocked, a session claiming to work and writing nothing. Each one is one
+ *   thing to go do, so they are counted, not weighted. The count is the
+ *   headline: it is 0 on a healthy board however busy, and every unit of it
+ *   is an action.
+ *
+ *   FLIGHT — things moving on their own. Working sessions, the distinct repos
+ *   they spread across, agents still out. Volume, not pressure: it can be
+ *   large on a perfectly healthy board, so it renders calm and is never
+ *   summed with demand.
+ *
+ * WHAT SURVIVES from the weighted design, deliberately:
+ *   - The severity order needsYou > blocked > stalled — always the defensible
+ *     part of the weights. It is now an explicit rank (DEMAND_KINDS order),
+ *     not arithmetic: needsYou means only you can restart the work, blocked
+ *     may or may not be yours to clear, stalled needs a look first.
+ *   - The no-todo rule, above.
+ *   - The runState guard: a half-shaped run costs its own term, not the panel.
+ *
+ * WHAT DIED WITH THE SUM, so it is not rebuilt by accident:
+ *   - The weights. They existed to merge unlike terms into one scalar; with
+ *     no scalar there is nothing to weight.
+ *   - The √fan-out. It existed so one 44-agent fan-out could not drown the
+ *     sum; with no sum there is nothing to drown, and the honest figure for
+ *     "how many agents are out" is the count.
+ *   - The capacity and the percent. If a ceiling is ever justified it will be
+ *     a measured one — the session count at which stalls start appearing —
+ *     and no such measurement exists yet.
+ *
+ * WHAT WAS CONSIDERED AND REJECTED:
+ *   - A state word (IDLE / WORKING / BLOCKED / SATURATED). heroFor in app.js
+ *     is already that instrument, one panel to the right, and it names the
+ *     worst thing on the board. A second state word says the same thing twice.
+ *   - A trend (now versus ten minutes ago). Neither surface can carry one
+ *     honestly: the phone page runs no script under default-src 'none' and is
+ *     rebuilt statelessly, and the desktop loses client-side history on every
+ *     reload, so the trend would render blank or fabricated exactly when it
+ *     was wanted.
  */
-export const LOAD_WEIGHTS = {
-  needsYou: 3, blocked: 2, stalled: 2, context: 1, session: 0.5, fanout: 0.75,
-};
-export const LOAD_CAPACITY = 8;
+export const DEMAND_KINDS = [
+  ['needsYou', 'NEEDS YOU', 'hot'],
+  ['blocked', 'BLOCKED', 'warn'],
+  ['stalled', 'STALLED', 'warn'],
+];
 
 const AGENT_OUT = new Set(['running', 'stalled', 'open']);
 
 /**
- * The gauge, its total, and every term that produced it.
+ * Agents still out for one session, whichever shape it arrives in.
  *
- * Returns the composition rather than a bare number, because a single figure with
- * no decomposition is not actionable: "load is 61" tells you nothing you can act
- * on, and "3 of that is a run waiting on you" tells you what to do next.
+ * The desktop hands sessions carrying an `agents` array; the phone hands the
+ * published projection, which strips the array (labels are private) and keeps
+ * only the counts. Both surfaces read this model, so it accepts both shapes —
+ * the same idempotence toPublicBoard's own agentCounts already needs.
  */
-export function loadModel(state, now = Date.now()) {
-  const runs = state.runs ?? [];
-  const sessions = state.sessions ?? [];
+const agentsOutOf = (s) => (Array.isArray(s.agents)
+  ? s.agents.filter((a) => AGENT_OUT.has(a.state)).length
+  : (s.agentsOut ?? 0));
+
+/**
+ * The census both surfaces render: what is stopped on a human, and what is
+ * moving on its own. No clock input, so nothing here can freeze stale between
+ * pushes, and the same board always produces the same census.
+ */
+export function attentionModel(state) {
+  const runs = state?.runs ?? [];
+  const sessions = state?.sessions ?? [];
   // Both halves. A session attached to a run is still a live thread.
   const live = [...sessions, ...runs.map((r) => r?.session).filter(Boolean)];
-  const busy = live.filter((s) => s.status && s.status !== 'idle');
+  const busy = live.filter((s) => s?.status && s.status !== 'idle');
+  // Contexts are only countable where the session names its project. The phone
+  // projection strips `project` (a relative path is still a path), so there the
+  // count is a floor, not a fact — `contextsExact` is what lets the caption
+  // refuse to state it rather than publish "1 CONTEXT" about any spread.
+  const withProject = busy.filter((s) => s.project);
 
-  const agentsOut = live.reduce(
-    (n, s) => n + (s.agents ?? []).filter((a) => AGENT_OUT.has(a.state)).length, 0,
-  );
-
-  const raw = [
-    ['needsYou', 'NEEDS YOU', runs.reduce((n, r) => n + (r?.needsInput?.length ?? 0), 0), 'hot'],
-    // Guarded. `runState` dereferences `needsInput` and `units`, and this gauge
+  const counts = {
+    // Items, not runs: one run asking three questions is three things to answer.
+    needsYou: runs.reduce((n, r) => n + (r?.needsInput?.length ?? 0), 0),
+    // Guarded. `runState` dereferences `needsInput` and `units`, and this
     // renders on every parse including the partial refresh, so a run that is
     // half-shaped for one tick must cost that term and not the whole panel.
-    ['blocked', 'BLOCKED', runs.filter((r) => {
+    blocked: runs.filter((r) => {
       try { return runState(r) === 'blocked'; } catch { return false; }
-    }).length, 'warn'],
-    ['stalled', 'STALLED', live.filter((s) => s.status === 'stalled').length, 'warn'],
-    ['context', 'CONTEXTS', new Set(busy.map((s) => s.project || '—')).size, 'live'],
-    ['session', 'SESSIONS', live.filter((s) => s.status === 'working').length, 'live'],
-    ['fanout', 'AGENTS OUT', agentsOut, 'live'],
-  ];
+    }).length,
+    stalled: busy.filter((s) => s.status === 'stalled').length,
+    sessions: live.filter((s) => s?.status === 'working').length,
+    contexts: new Set(withProject.map((s) => s.project)).size,
+    agentsOut: live.reduce((n, s) => n + agentsOutOf(s), 0),
+  };
 
-  const terms = raw.map(([key, label, count, cls]) => ({
-    key,
-    label,
-    count,
-    weight: LOAD_WEIGHTS[key],
-    // Fan-out is the one sublinear term; see the header.
-    points: key === 'fanout'
-      ? LOAD_WEIGHTS.fanout * Math.sqrt(Math.max(0, count))
-      : LOAD_WEIGHTS[key] * count,
-    cls,
-  })).filter((t) => t.count > 0);
+  const demand = DEMAND_KINDS
+    .map(([key, label, cls]) => ({ key, label, count: counts[key], cls }))
+    .filter((t) => t.count > 0);
 
-  const score = terms.reduce((n, t) => n + t.points, 0);
   return {
-    score,
-    capacity: LOAD_CAPACITY,
-    pct: Math.min(100, (100 * score) / LOAD_CAPACITY),
-    over: score > LOAD_CAPACITY,
-    // Heaviest first: what to look at, not what happens to be listed first.
-    terms: terms.sort((a, b) => b.points - a.points),
+    counts,
+    demand,
+    demandCount: demand.reduce((n, t) => n + t.count, 0),
+    flight: {
+      sessions: counts.sessions,
+      contexts: counts.contexts,
+      // A stalled session still occupies its repo, so it holds a context even
+      // though it earns no working-session count.
+      contextsExact: busy.length > 0 && withProject.length === busy.length,
+      agentsOut: counts.agentsOut,
+    },
   };
 }
 
-/** The one-line caption under the bar. Counts, not points: the number a person
- *  can verify by looking at the board. */
-export function loadCaption(model) {
-  return model.terms.map((t) => `${t.count} ${t.label}`).join(' · ');
+/**
+ * The one-line caption: demand first in severity order — what to go do — then
+ * flight, which is context. Counts a person can verify by looking at the board,
+ * with real plurals: the old caption's "1 AGENTS OUT" was a standing typo.
+ */
+export function attentionCaption(m) {
+  const parts = m.demand.map((t) => `${t.count} ${t.label}`);
+  const f = m.flight;
+  if (f.sessions) parts.push(`${f.sessions} SESSION${f.sessions === 1 ? '' : 'S'}`);
+  if (f.contexts && f.contextsExact) {
+    parts.push(`${f.contexts} CONTEXT${f.contexts === 1 ? '' : 'S'}`);
+  }
+  if (f.agentsOut) parts.push(`${f.agentsOut} AGENT${f.agentsOut === 1 ? '' : 'S'} OUT`);
+  return parts.join(' · ');
 }
 
 /** How long a session has been up, for the one line it gets. */

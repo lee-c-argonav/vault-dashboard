@@ -418,12 +418,14 @@ body {
 }
 .focus-text code { font: 15px/1 var(--mono); color: var(--dim); }
 
-/* The load gauge. One segment per contributing term, width proportional to the
-   attention units it contributes, against a track that is the full capacity — so
-   the empty tail is real headroom rather than a normalisation that always fills.
-   The equation is in loadModel (runs-view.js) and every segment carries its own
-   arithmetic in a title. */
-.load { display: flex; align-items: center; gap: 10px; margin-top: auto; }
+/* The attention census. One 6px mark per real thing — demand (stopped on a
+   human) left of the hairline divider, working sessions right of it — inside a
+   track that stays mostly empty on a healthy board. Empty is the message: the
+   proportional bar this replaced filled 70% of the track on a board where
+   nothing needed anyone (measured 2026-08-11), because it summed healthy work
+   into the fill. Marks are countable at a glance, which segment widths scaled
+   by weights never were. The model is attentionModel in runs-view.js. */
+.load { display: flex; align-items: center; gap: 10px; margin-top: auto; padding-bottom: 10px; }
 .load-k { font: 9px/1 var(--mono); letter-spacing: .16em; color: var(--dim); flex: 0 0 auto; }
 
 .load-n {
@@ -432,40 +434,48 @@ body {
   font: 15px/1 var(--mono);
   font-variant-numeric: tabular-nums;
   letter-spacing: .02em;
-  color: var(--bone);
+  /* Dim at zero: a 00 demand count is the good state and must not draw the
+     eye. Bright bone was the old always-on percentage's colour. */
+  color: var(--dim);
   text-align: right;
 }
-.load-n.over { color: var(--orange); }
+.load-n.hot { color: var(--orange); }
 
+/* NO TRACK. A bordered full-width strip is a capacity, and the census
+   deliberately has none: there is no measured number of sessions at which this
+   machine is full, so drawing a ceiling asserts one that was never established.
+   It also read as an empty gauge on a genuinely busy board — three marks in a
+   1400px box says "nothing is happening" while three sessions, three contexts
+   and two agents are in flight, which is the opposite of true.
+   
+   The marks size the row instead, so the strip is exactly as long as there is
+   something to say and the caption sits beside it rather than a kilometre away. */
 .load-strip {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   display: flex;
-  align-items: stretch;
-  gap: 1px;
+  align-items: center;
+  gap: 2px;
   height: 10px;
   min-width: 0;
-  /* The track. A hairline rather than a fill, so an empty gauge reads as empty
-     and not as a bar of some other colour. */
-  box-shadow: inset 0 0 0 1px var(--rule-hot);
-  padding: 1px;
-  overflow: hidden;
 }
-.load-strip i.seg { display: block; height: 100%; flex: 0 0 auto; min-width: 1px; background: var(--dimmer); }
-/* Same encoding as everywhere else: orange is live work, amber wants a look,
-   and the thing that has stopped and is waiting on you is the brightest. */
-.load-strip i.is-live { background: var(--orange-dim); }
-/* Adjacent live terms alternate one step, so the composition is readable as
-   segments rather than as one long bar. The caption lists the same terms in the
-   same order, heaviest first, which is what maps a segment to its name. */
-.load-strip i.is-live:nth-child(even) { background: var(--orange); opacity: .55; }
-.load-strip i.is-warn { background: var(--amber); }
+/* 6px squares, the same mark size the phone legend uses. Same encoding as
+   everywhere else: orange stopped-and-asking, amber wants a look, dim orange
+   is live work. */
+.load-strip i.mk { display: block; width: 6px; height: 6px; flex: 0 0 auto; }
 .load-strip i.is-hot  { background: var(--orange); }
-.load-strip.over { box-shadow: inset 0 0 0 1px var(--orange); }
+.load-strip i.is-warn { background: var(--amber); }
+.load-strip i.is-live { background: var(--orange-dim); }
+/* The seam between "go do" and "running fine". Only rendered when both sides
+   have marks. */
+.load-strip i.load-div { width: 1px; height: 100%; flex: 0 0 auto; background: var(--rule-hot); margin: 0 3px; }
 
-/* The composition in words. A bare number is not actionable; this is the line
-   that says which term to go and look at. */
+/* The census in words, demand first in severity order. This is the line that
+   says which kind to go and look at; the hero one panel over names the single
+   worst item. */
 .load-cap {
-  margin: 5px 0 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0 0 0 4px;
   font: 9px/1.4 var(--mono);
   letter-spacing: .1em;
   text-transform: uppercase;
