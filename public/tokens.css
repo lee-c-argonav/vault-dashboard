@@ -207,12 +207,47 @@
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--st-todo);
 }
+/* WORKING GLOWS. It is the one thing a glance is trying to answer — which of
+   these is actually running right now — and a static orange dot against a static
+   grey one is a comparison: you have to find another row to make it. A pulse is
+   absolute, and it is read without reference to anything else.
+
+   A SOFT HALO, not a blink and not a hard beat. The LIVE lamp already owns
+   opacity-blinking, and two things blinking the same way read as one signal.
+   This emits instead: the dot holds steady and a ring grows out of it and fades.
+   A sharper double-beat was tried and was too loud for a column of rows — the
+   board is watched all day, and a signal that insists is a signal that gets
+   turned off. The ring costs no layout, because a box-shadow does not
+   participate in it, so a 6px halo on a 5px dot cannot push a row around.
+
+   Only `working` pulses. `stalled` is amber and deliberately STILL, because it
+   means a process claiming to work while writing nothing, and animating it would
+   assert the very liveness the state exists to deny. */
 .sess.is-working .sess-dot,
 .sess.is-working .dot {
   border-radius: 50%;
   background: var(--st-running);
   box-shadow: none;
+  animation: sess-pulse 2.4s ease-out infinite;
 }
+
+@keyframes sess-pulse {
+  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--st-running) 55%, transparent); }
+  70%  { box-shadow: 0 0 0 6px color-mix(in srgb, var(--st-running) 0%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--st-running) 0%, transparent); }
+}
+
+/* Both surfaces, from one rule. The desktop's own reduced-motion block covers
+   the LIVE lamp and the panel transition and never saw this file. Held still,
+   the halo still reads as emission, so the state is never left to hue alone. */
+@media (prefers-reduced-motion: reduce) {
+  .sess.is-working .sess-dot,
+  .sess.is-working .dot {
+    animation: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--st-running) 28%, transparent);
+  }
+}
+
 /* No clip-path here: clipping a circle to a triangle yields a wedge that reads
    as neither. A stalled session is carried by the amber fill plus its ring. */
 .sess.is-stalled .sess-dot,

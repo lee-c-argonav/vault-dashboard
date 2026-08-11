@@ -484,7 +484,17 @@ function sessionRow(s, now) {
     .filter((part) => part && part !== headline).join(' · ');
   const row = el('div', `sess is-${s.status || 'unknown'}`);
   const head = el('div', 'sess-head');
-  head.append(el('i', 'sess-dot'));
+  const dot = el('i', 'sess-dot');
+  // Phase-offset the pulse by pid. Every row is rebuilt at once by
+  // replaceChildren, so without this all animations restart together and the
+  // column blinks in lockstep — which reads as one system-wide signal rather
+  // than N processes each alive on its own. A NEGATIVE delay starts the
+  // animation partway through instead of waiting, so the dot is never dark on
+  // first paint. Derived from the pid, so it is varied without being random and
+  // survives a rebuild identically; same reasoning as the lattice's per-node
+  // drift.
+  dot.style.animationDelay = `-${(s.pid % 24) / 10}s`;
+  head.append(dot);
 
   const label = el('span', 'sess-title', headline);
   label.title = meta ? `${headline}\n${meta}` : headline;
