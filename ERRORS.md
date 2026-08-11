@@ -215,3 +215,30 @@ signal for three of the four attempts.
 **Remember:** A profile lock is a file, not a process. Killing processes named
 after the profile is not the same as releasing it, and a process count that does
 not drop is evidence you are counting the wrong thing.
+
+## 2026-08-11 — Getting a CSS rule to reach the phone's published page
+**What didn't work:** Three attempts. First a backtick inside a CSS comment
+ended the stylesheet's template literal, and the syntax error named a line far
+from the cause; fixing one comment exposed a second one written the same way.
+Then the rule was placed in `TOKENS_FALLBACK`, the block that renders only when
+`tokens.css` is unreadable, so the markup shipped with no styling at all and the
+element measured 10×19 instead of 44×44. Then an anchor-based insert matched a
+`.legend i` rule that exists in both the fallback and the real stylesheet, and
+landed in the fallback again.
+**What did:** Anchoring to a selector that exists ONLY inside the real stylesheet,
+and verifying by counting the rule in the built page's `<style>` block rather
+than in the source file.
+**Remember:** When a file holds two copies of a stylesheet, "is the rule in the
+source" and "is the rule on the page" are different questions, and only the
+second one matters.
+
+## 2026-08-11 — Checking whether two elements overlap
+**What didn't work:** A bounding-box intersection test, twice. It reported the
+phone's refresh control as overlapping the headline, and reported 206px of page
+overflow on the desktop. Neither was real: the headline is a block element that
+spans its container by design, and the overflow reading came from measuring the
+desktop HUD in a 500px viewport left over from phone testing.
+**What did:** Measuring ink — a `Range` around the text nodes — and confirming
+the viewport width before trusting any layout number.
+**Remember:** A box is not what a reader sees. Test the glyphs, and check what
+viewport you are actually in before reporting a layout defect.
