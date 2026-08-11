@@ -245,7 +245,7 @@ function heroFor(state) {
     const oldest = out.slice().sort((a, b) =>
       String(a.started ?? '').localeCompare(String(b.started ?? '')))[0];
     return {
-      label: 'AGENTS OUT',
+      label: 'AGENTS RUNNING',
       n: out.length,
       sub: oldest?.label ? `OLDEST — ${clip(oldest.label, 44)}` : '',
     };
@@ -386,6 +386,19 @@ function runRow(r, now, expanded = true) {
   const row = el('div', `run is-${st}${blockedNote(r) ? ' is-warn' : ''}${nostamp ? ' is-nostamp' : ''}`);
 
   const top = el('div', 'run-top');
+  // A run gets a mark too, and a LARGER one than a session's. A run outranks a
+  // session on this panel by design, and until now only sessions carried the
+  // at-a-glance "this is alive" signal — a run's state lived in a chip at the
+  // far right of the row, which is a read rather than a glance.
+  //
+  // Phase-offset by the runId, for the reason the session dot is offset by pid:
+  // every row is rebuilt at once, so without it the whole column beats in
+  // lockstep and reads as one signal. Derived, so it survives a rebuild
+  // identically rather than jumping.
+  const mark = el('i', 'run-dot');
+  const seed = [...String(r.runId || '')].reduce((n, c) => n + c.charCodeAt(0), 0);
+  mark.style.animationDelay = `-${(seed % 24) / 10}s`;
+  top.append(mark);
   const goal = el('span', 'run-goal', r.goal);
   goal.title = r.goal;
   top.append(goal, el('span', 'run-proj', r.machine || ''));

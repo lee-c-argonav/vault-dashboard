@@ -92,7 +92,7 @@ test('the caption leads with what to act on, then what is merely running', () =>
     sessions: [session({ project: 'a', agents: agents(1) }), session({ project: 'b' })],
   });
   assert.match(attentionCaption(m),
-    /^1 NEEDS YOU · 2 SESSIONS · 2 CONTEXTS · 1 AGENT OUT$/);
+    /^1 NEEDS YOU · 2 SESSIONS · 2 CONTEXTS · 1 AGENT RUNNING$/);
 });
 
 test('a session attached to a run still counts as a live thread', () => {
@@ -101,7 +101,7 @@ test('a session attached to a run still counts as a live thread', () => {
   assert.equal(m.flight.agentsOut, 4);
 });
 
-test('agents out is the raw count, in either shape the surfaces hold', () => {
+test('agents running is the raw count, in either shape the surfaces hold', () => {
   // The sqrt died with the sum: it existed so one 44-agent fan-out could not
   // drown the other terms, and with no sum there is nothing to drown. 44 out
   // is reported as 44.
@@ -146,13 +146,14 @@ test('contexts are stated only where every busy session names its project', () =
 });
 
 test('the caption pluralises honestly', () => {
-  // The old caption printed "1 AGENTS OUT" on the live board.
+  // The old caption printed "1 AGENTS OUT" on the live board — wrong plural
+  // and jargon in four words.
   const one = attentionModel({ runs: [], sessions: [session({ agents: agents(1) })] });
-  assert.match(attentionCaption(one), /1 SESSION · 1 CONTEXT · 1 AGENT OUT$/);
+  assert.match(attentionCaption(one), /1 SESSION · 1 CONTEXT · 1 AGENT RUNNING$/);
   const two = attentionModel({
     runs: [], sessions: [session({ agents: agents(2) }), session({ project: 'b' })],
   });
-  assert.match(attentionCaption(two), /2 SESSIONS · 2 CONTEXTS · 2 AGENTS OUT$/);
+  assert.match(attentionCaption(two), /2 SESSIONS · 2 CONTEXTS · 2 AGENTS RUNNING$/);
 });
 
 test('every demand term is self-describing', () => {

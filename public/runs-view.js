@@ -410,7 +410,13 @@ export function attentionCaption(m) {
   if (f.contexts && f.contextsExact) {
     parts.push(`${f.contexts} CONTEXT${f.contexts === 1 ? '' : 'S'}`);
   }
-  if (f.agentsOut) parts.push(`${f.agentsOut} AGENT${f.agentsOut === 1 ? '' : 'S'} OUT`);
+  // "RUNNING", not "OUT". Out is jargon — it means dispatched and not yet
+  // returned, which a reader has to be told rather than shown, and the operator
+  // asked what it meant. The rows already say "STILL RUNNING", so this is also
+  // the board agreeing with itself. The internal field keeps the name
+  // `agentsOut`, because renaming it reaches the projection and the digest and
+  // buys a reader nothing.
+  if (f.agentsOut) parts.push(`${f.agentsOut} AGENT${f.agentsOut === 1 ? '' : 'S'} RUNNING`);
   return parts.join(' · ');
 }
 

@@ -271,6 +271,42 @@
   border-color: var(--st-blocked);
 }
 
+/* ---- run marks --------------------------------------------------------- */
+/* A run is a session that published a plan, so it takes the session vocabulary
+   one size up: 7px against 5px, because a run outranks a session on this panel
+   and the mark should say so before the text does. Same circle, because both are
+   a process — the square family stays reserved for the steps inside one.
+
+   Running GLOWS, on the same halo as a working session. Needs-you and blocked do
+   NOT: a stopped run already owns the loudest chip on the row, and animating it
+   as well would spend motion on the one state that is not moving. */
+.run-dot {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--st-todo);
+}
+.run.is-running .run-dot {
+  background: var(--st-running);
+  animation: sess-pulse 2.4s ease-out infinite;
+}
+.run.is-needs-input .run-dot { background: var(--st-running); }
+.run.is-blocked .run-dot { background: var(--st-blocked); }
+.run.is-paused .run-dot { background: var(--st-done); }
+.run.is-done .run-dot { background: var(--st-done); }
+/* A run that is working with something blocked: the run is alive, so it keeps
+   the pulse, and the block is carried by the chip and the unit list. */
+.run.is-warn .run-dot { background: var(--st-running); }
+
+@media (prefers-reduced-motion: reduce) {
+  .run.is-running .run-dot {
+    animation: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--st-running) 28%, transparent);
+  }
+}
+
 /* ---- durations --------------------------------------------------------- */
 
 .dur.is-done { color: var(--dur-done); }

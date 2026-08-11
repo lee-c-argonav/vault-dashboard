@@ -472,8 +472,15 @@ body{
    against an unconstrained h2 with overflow-wrap:anywhere that squeezed the
    title to one character per line on a 390px phone. The badge now drops to its
    own line instead. */
+/* The run mark, one size up from a session's, same as the desktop. No animation:
+   the phone is a static page rebuilt on a timer, so a pulse would claim a
+   liveness the surface itself does not have. */
+.rdot{flex:0 0 auto;align-self:center;width:7px;height:7px;border-radius:50%;background:var(--dim)}
+.run.running .rdot,.run.needs-input .rdot{background:var(--orange)}
+.run.blocked .rdot{background:var(--amber)}
 .hd{display:flex;align-items:baseline;gap:8px 10px;justify-content:space-between;
     flex-wrap:wrap}
+.hd h2{flex:1 1 auto;min-width:0}
 .hd .st{flex:0 1 auto;min-width:0;margin:0}
 h2{font:600 17px/1.35 var(--sans);margin:0;overflow-wrap:anywhere;
    flex:1 1 14ch;min-width:0}
@@ -625,6 +632,7 @@ function runCard(r, now, expanded) {
     return `
 <article class="run collapsed ${esc(st)}${blockedNote(r) ? ' warn' : ''}${quietMs(r, now) === null ? ' nostamp' : ''}">
   <div class="hd">
+    <i class="rdot"></i>
     <h2>${esc(r.goal)}</h2>
     <span class="st">${esc(stateText(r, now, r.session))}</span>
   </div>
@@ -634,6 +642,7 @@ function runCard(r, now, expanded) {
   return `
 <article class="run ${esc(st)}${blockedNote(r) ? ' warn' : ''}${quietMs(r, now) === null ? ' nostamp' : ''}">
   <div class="hd">
+    <i class="rdot"></i>
     <h2>${esc(r.goal)}</h2>
     <span class="st">${esc(stateText(r, now, r.session))}</span>
   </div>
