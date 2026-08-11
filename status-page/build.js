@@ -24,7 +24,7 @@ import {
   LABEL, runState, stateText, durationOf, unitWindow, expandSet, askOf, quietMs,
   elapsedText, humanMs, counts, partitionRuns, linkSessions, batchStamped,
   STALE_MS,
-  sessionContext, sortRank, blockedNote, FINISHED_MAX_AGE_MS, agentEta, URGENCY,
+  sessionContext, sortRank, blockedNote, FINISHED_MAX_AGE_MS, agentEta, URGENCY, countAsOf,
   attentionModel, attentionCaption, clockAt, goalEta, goalEtaText,
 } from '../public/runs-view.js';
 
@@ -700,7 +700,8 @@ function runCard(r, now, expanded) {
     <h2>${esc(r.goal)}</h2>
     <span class="st">${esc(stateText(r, now, r.session))}</span>
   </div>
-  <p class="foot"><span class="mach">${esc(r.machine)}</span> · ${c.done}/${c.total}</p>
+  <p class="foot"><span class="mach">${esc(r.machine)}</span> · ${c.done}/${c.total}${
+    countAsOf(r, now) ? ` ${countAsOf(r, now)}` : ''}</p>
 </article>`;
   }
   return `
@@ -721,6 +722,7 @@ function runCard(r, now, expanded) {
       : `all ${r.session.agentsTotal} returned`}</p>` : ''}
   <div class="foot">
     <span><span class="mach">${esc(r.machine)}</span> · ${c.done} of ${c.total} done${
+      countAsOf(r, now) ? ` ${countAsOf(r, now)}` : ''}${
       began ? ` · started ${esc(began)}` : ''}${elapsed ? ` · ${elapsed}` : ''}</span>
     <span>${esc(goal)}</span>
   </div>

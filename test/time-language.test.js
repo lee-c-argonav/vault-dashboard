@@ -232,3 +232,31 @@ test('the signature survives a malformed observed fan-out', () => {
   const r = run({ session: { pid: 1, agents: [null, {}, { id: 'x', state: 'running' }] } });
   assert.doesNotThrow(() => rowSignature(r, NOW));
 });
+
+// A count is a claim about NOW; a run file is a claim about when it was written.
+// `0 of 14 done` rendered as a plain fact beside a run whose file had not been
+// touched for 158 minutes, while the agent behind it had finished five units.
+// The operator reported it as a HUD bug; it was not, the board was reporting the
+// file faithfully and saying nothing about the file's age where the age mattered.
+test('a stale run says how old its count is', async () => {
+  const { countAsOf, STALE_MS } = await import('../public/runs-view.js');
+  const now = Date.parse('2026-08-11T23:38:00Z');
+  const stale = { state: 'running', updated: '2026-08-11T21:00:00Z', wrote: '2026-08-11T21:00:00Z' };
+  assert.match(countAsOf(stale, now), /^as of 2h38m ago$/);
+
+  // Fresh says nothing. Every run is a few seconds out of date, and a qualifier
+  // that always fires is one the reader stops seeing.
+  const fresh = { state: 'running', updated: '2026-08-11T23:37:00Z', wrote: '2026-08-11T23:37:00Z' };
+  assert.equal(countAsOf(fresh, now), '');
+
+  // Just inside the threshold, still nothing.
+  const edge = { state: 'running', wrote: new Date(now - STALE_MS + 1000).toISOString() };
+  assert.equal(countAsOf(edge, now), '');
+});
+
+test('a finished run does not apologise for its age', async () => {
+  const { countAsOf } = await import('../public/runs-view.js');
+  const now = Date.parse('2026-08-11T23:38:00Z');
+  // A done run's count is final. "as of 3 days ago" would be true and useless.
+  assert.equal(countAsOf({ state: 'done', wrote: '2026-08-08T10:00:00Z' }, now), '');
+});

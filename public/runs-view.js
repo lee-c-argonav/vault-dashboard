@@ -470,6 +470,32 @@ export function contextBreakdown(state) {
       || a.project.localeCompare(b.project));
 }
 
+/**
+ * How stale the numbers on a run row are, in words, or '' when they are fresh.
+ *
+ * A count is a claim about NOW and a run file is a claim about when it was last
+ * written. `0 of 14 done` was rendered as a plain fact beside a run whose file
+ * had not been touched for 158 minutes, while the agent behind it had finished
+ * five units — the operator saw the disagreement and reported it as a HUD bug.
+ * It was not: the board was reporting the file faithfully and saying nothing
+ * about the file's age at the point where the age mattered.
+ *
+ * The row already carries `NO UPDATE 2h38m` in its chip, at the far end of the
+ * header, which is a different sentence in a different place. This puts the
+ * qualifier on the number it qualifies, which is the whole lesson recorded in
+ * this repo's ERRORS.md: a dashboard can be correct field by field and wrong as
+ * a sentence.
+ *
+ * Only past STALE_MS. Every run is a few seconds out of date and saying so
+ * always would train the reader to stop seeing it.
+ */
+export function countAsOf(run, now) {
+  if (run?.state === 'done') return '';
+  const q = quietMs(run, now);
+  if (q === null || q <= STALE_MS) return '';
+  return `as of ${humanMs(q)} ago`;
+}
+
 /** How long a session has been up, for the one line it gets. */
 export function sessionText(s, now) {
   const t = Date.parse(s.since);

@@ -6,7 +6,7 @@
 // Both import it so the two surfaces cannot disagree about whether a run is
 // waiting on you. Liveness lives here, not in State: State is diffed by
 // stringify below, so a clock-derived field would look changed on every push.
-import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText, sessionActivity, mergedRank, attentionModel, attentionCaption, agentEta, contextBreakdown, clockAt, finishClock, goalEta, goalEtaText, fanoutStrip }
+import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText, sessionActivity, mergedRank, attentionModel, attentionCaption, agentEta, contextBreakdown, clockAt, finishClock, goalEta, goalEtaText, fanoutStrip, countAsOf }
   from './runs-view.js';
 
 const STATE_SOURCES = ['/api/state'];
@@ -512,10 +512,20 @@ function runRow(r, now, expanded = true) {
   // subtraction to know when the run began; the clock is the fact, the delta
   // the magnitude, and they are cheap to state together.
   const began = clockAt(r.started, now);
-  foot.append(el('span', null,
+  // The count carries its own age when the file behind it has gone quiet. A
+  // count is a claim about NOW; a run file is a claim about when it was written.
+  const asOf = countAsOf(r, now);
+  const countLine = el('span', null,
     `${c.done} of ${c.total} done`
+    + (asOf ? ` ${asOf}` : '')
     + (began ? ` · started ${began}` : '')
-    + (elapsed ? ` · ${elapsed}` : '')));
+    + (elapsed ? ` · ${elapsed}` : ''));
+  if (asOf) {
+    countLine.classList.add('is-stale-count');
+    countLine.title = 'This run has not written its status file since then, so the '
+      + 'count is what the file last said, not what has happened since.';
+  }
+  foot.append(countLine);
   // The GOAL's time left — one slot, never silently blank while work remains.
   // goalEta decides the claim: a forecast from timed units, a ≥floor borrowed
   // from the live fan-out, or the reason no estimate exists. The fan-out's own
