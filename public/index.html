@@ -11,6 +11,10 @@
 <link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png">
 <link rel="apple-touch-icon" href="./apple-touch-icon.png">
 <link rel="stylesheet" href="./hud.css">
+<!-- After hud.css deliberately. tokens.css owns the state encoding for both
+     surfaces; loading it last means a rule left behind in hud.css loses rather
+     than silently reinstating the old encoding on one surface only. -->
+<link rel="stylesheet" href="./tokens.css">
 </head>
 <body>
 
@@ -70,11 +74,14 @@
   <nav class="shortcuts" id="shortcuts" aria-label="Shortcuts"></nav>
 
   <div class="readout" id="h-readout">
-    <div class="cell"><span class="cell-k">OPEN</span><span class="cell-v" id="s-open">--</span></div>
-    <div class="cell"><span class="cell-k">STALE</span><span class="cell-v" id="s-stale">--</span></div>
-    <div class="cell"><span class="cell-k">DUE</span><span class="cell-v" id="s-due">--</span></div>
-    <div class="cell"><span class="cell-k">OVER</span><span class="cell-v" id="s-over">--</span></div>
-    <div class="cell"><span class="cell-k">DONE</span><span class="cell-v" id="s-done">--</span></div>
+    <!-- Agent work, not todos. These five were OPEN/STALE/DUE/OVER/DONE, every one
+         of them read from a todo system that is no longer used, on a panel whose
+         subject changed to agent runs on 2026-08-06. -->
+    <div class="cell"><span class="cell-k">RUNS</span><span class="cell-v" id="s-runs">--</span></div>
+    <div class="cell"><span class="cell-k">SESSIONS</span><span class="cell-v" id="s-sessions">--</span></div>
+    <div class="cell"><span class="cell-k">AGENTS</span><span class="cell-v" id="s-agents">--</span></div>
+    <div class="cell"><span class="cell-k">STALLED</span><span class="cell-v" id="s-stalled">--</span></div>
+    <div class="cell"><span class="cell-k">NEEDS YOU</span><span class="cell-v" id="s-needs">--</span></div>
   </div>
 </header>
 
@@ -123,8 +130,10 @@
       <p class="focus-text" id="focus-text">—</p>
       <div class="load">
         <span class="load-k">LOAD</span>
+        <span class="load-n" id="load-n">--</span>
         <div class="load-strip" id="load-strip"></div>
       </div>
+      <p class="load-cap" id="load-cap"></p>
     </div>
   </section>
 
@@ -147,6 +156,21 @@
       <span class="lab">RUNS</span>
       <span class="rule-fill"></span>
       <span class="phead-meta" id="runs-count"></span>
+    </div>
+    <!-- Its own row, not a slot in the header: .phead is a 26px flex line whose
+         counter is already nowrap and can read "05 RUNS · 02 SILENT · 01 NEEDS
+         YOU", with no overflow rule and nothing to clip a key placed inside it.
+         Static markup, because the key never changes and rendering it from JS
+         would put constant content through the row signature. -->
+    <!-- role="group" because ARIA prohibits naming a bare div: it computes as
+         `generic`, and an aria-label on `generic` is dropped before it reaches
+         any platform accessibility API. -->
+    <div class="legend" role="group" aria-label="Unit state key">
+      <span><i class="is-running"></i>running</span>
+      <span><i class="is-blocked"></i>blocked</span>
+      <span><i class="is-failed"></i>failed</span>
+      <span><i class="is-todo"></i>todo</span>
+      <span><i class="is-done"></i>done</span>
     </div>
     <div class="pbody scroll" id="runs-list"></div>
   </section>

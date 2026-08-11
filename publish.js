@@ -35,8 +35,31 @@ import { readBoard, boardDigest } from './status-page/build.js';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.join(HERE, 'status-page', 'deploy.sh');
 
-/** Five minutes. The floor on how stale the published page can be. */
-export const PUBLISH_MS = 5 * 60_000;
+/**
+ * How often the board is CHECKED. Not how often it deploys — `decideAndDeploy`
+ * skips when the digest is unchanged, and MIN_DEPLOY_INTERVAL_MS bounds the rest.
+ *
+ * Sixty seconds rather than five minutes, because the page's worst case was
+ * five minutes of publisher plus two of page reload: seven minutes behind a
+ * board whose whole purpose is telling you something needs you.
+ */
+export const PUBLISH_MS = 60_000;
+
+/**
+ * The floor between two uploads, independent of the tick.
+ *
+ * A fast tick is not a fast deploy rate unless something says so. The overlap
+ * guard below assumed "the tick is five minutes, so this should never fire";
+ * at 60s a 40-second upload leaves 20 seconds of headroom and a slow one starts
+ * dropping ticks silently. This bounds the rate directly: at 120s the ceiling
+ * is 720 uploads a day, against 288 ticks a day before this change, and the
+ * digest suppresses almost all of them.
+ *
+ * Raise it if the hosting plan caps deployments — a 100/day cap implies roughly
+ * 900s here. VAULT_HUD_MIN_DEPLOY_MS overrides it without a code change.
+ */
+export const MIN_DEPLOY_INTERVAL_MS =
+  Number(process.env.VAULT_HUD_MIN_DEPLOY_MS) || 120_000;
 /** A deploy that hangs must not stack up behind the next tick. */
 const DEPLOY_TIMEOUT_MS = 4 * 60_000;
 
@@ -45,6 +68,8 @@ let inFlight = false;
 let last = { at: null, ok: null, error: '', skipped: 0, deploys: 0 };
 /** Digest of the board as last uploaded. */
 let publishedDigest = null;
+/** When the last upload actually started, for MIN_DEPLOY_INTERVAL_MS. */
+let lastDeployAt = 0;
 
 /** What the last attempt did. server.js surfaces this so a dead publisher is visible. */
 export function publishStatus() {
@@ -54,6 +79,7 @@ export function publishStatus() {
 /** Forget what was published, so the next tick uploads whatever it finds. */
 export function resetPublished() {
   publishedDigest = null;
+  lastDeployAt = 0;
   last = { at: null, ok: null, error: '', skipped: 0, deploys: 0 };
 }
 
@@ -63,9 +89,11 @@ export function resetPublished() {
  * cost the desktop board too.
  */
 export function publishOnce(log = () => {}) {
-  // Overlap guard. A deploy takes tens of seconds and the tick is five minutes,
-  // so this should never fire, but a stalled upload plus a fixed interval is
-  // how a machine ends up with twelve concurrent uploads.
+  // Overlap guard. It used to say "the tick is five minutes, so this should never
+  // fire"; the tick is 60 seconds now and a 40-second upload leaves 20 seconds of
+  // headroom, so this fires routinely and `last.skipped` counts it. That is the
+  // intended behaviour — MIN_DEPLOY_INTERVAL_MS bounds the rate — but the comment
+  // claiming otherwise had to go with the number it described.
   if (inFlight) {
     log('[vault-hud] publish skipped, previous deploy still running\n');
     return Promise.resolve(false);
@@ -108,6 +136,18 @@ async function decideAndDeploy(log) {
     last = { ...last, at: new Date().toISOString(), ok: true, error: '', skipped: last.skipped + 1 };
     return false;
   }
+  // Something changed, but not long enough since the last upload. Return
+  // WITHOUT recording the digest, so the next tick uploads it rather than
+  // treating a rate-limited change as published.
+  const since = Date.now() - lastDeployAt;
+  if (lastDeployAt && since < MIN_DEPLOY_INTERVAL_MS) {
+    last = {
+      ...last, at: new Date().toISOString(), ok: true, error: '',
+      throttled: (last.throttled ?? 0) + 1,
+    };
+    return false;
+  }
+  lastDeployAt = Date.now();
   const ok = await deploy(log);
   // Only a confirmed upload updates the mark. A failed deploy must retry on the
   // next tick rather than believe it published.

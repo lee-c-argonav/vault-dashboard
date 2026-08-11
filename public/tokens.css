@@ -1,0 +1,280 @@
+/* tokens.css — the state encoding, and the only place it is defined.
+ *
+ * WHY THIS FILE EXISTS. The encoding lived twice: once in hud.css and once in a
+ * template literal inside status-page/build.js. The two drifted, and the drift
+ * was invisible because nothing compared them. Worse, the encoding did not work
+ * on either surface. Measured against --bg #08090A on 2026-08-11:
+ *
+ *   todo dot #2A2D33 ................ 1.44:1   not visibly rendered at all
+ *   running orange vs blocked amber . 1.44:1   the state worth catching moved least
+ *   done time vs running time ....... 1.60:1   one column, two tenses, colour alone
+ *   done dot vs running dot ......... 2.42:1   finished vs live work
+ *   done label vs running label ..... identical, both --bone
+ *
+ * WHY SEMANTIC TOKENS RATHER THAN SHARED HEX. The two palettes are deliberately
+ * not the same. build.js documents why: --dim is #6E7175 on the desktop and
+ * #8B8F95 on the phone, because a phone is read in daylight at arm's length and
+ * the desktop value measures 3.85:1 on a phone card. The phone also carries a
+ * real light palette whose accents are darkened rather than inverted. Sharing raw
+ * hex would destroy that tuning. So what is shared is the MEANING of a state, and
+ * each surface resolves it against its own palette and theme.
+ *
+ * WHY IT NAMES BOTH SURFACES' SELECTORS. The two renderers use different class
+ * names (.run-u-dot against .u .dot) and always will. Listing both here makes a
+ * single rule govern both, so the surfaces cannot drift apart by editing one.
+ * A selector that matches nothing on the surface it is not serving costs nothing.
+ *
+ * THREE CHANNELS, SEPARATED. They were fused. Brightness now carries attention,
+ * hue carries state, and shape carries severity. Shape matters because no pair of
+ * accents on this palette clears 3:1 against each other: blocked is a triangle so
+ * it survives the 1.44:1 against running, and todo is hollow so it survives being
+ * the quietest thing on the board.
+ */
+
+:root {
+  /* Marks. */
+  --st-todo: var(--dim);          /* hollow; see the geometry block below */
+  --st-running: var(--orange);
+  --st-done: var(--dim);
+  --st-blocked: var(--amber);
+  --st-failed: var(--bone);
+
+  /* Labels. The running row is the brightest text in the list and the finished
+     row recedes. Previously done and running were both --bone, which is why the
+     eye landed on finished work as hard as on live work. */
+  --lab-todo: var(--text-3);
+  --lab-running: var(--bone);
+  --lab-done: var(--dim);
+  --lab-blocked: var(--amber);
+  --lab-failed: var(--bone);
+  /* --text-3 and --dim resolve to the same hex on the desktop palette, so todo
+     and done labels are equally recessive there. That is accepted rather than
+     worked around: both mean "not happening now", the palette has no third grey
+     that clears the text floor (--dimmer is 1.9:1 and is marks-only), and the
+     distinction is carried by the mark — hollow against filled — which is now
+     visible at 4.06:1 where it used to be 1.44:1. The shape rule is asserted in
+     test/encoding.test.js so this stays a decision rather than a coincidence. */
+
+  /* Durations. A blank cell where no measurement exists. */
+  --dur-done: var(--dim);
+  --dur-running: var(--orange);
+  --dur-bad: var(--amber);
+}
+
+/* ---- unit marks -------------------------------------------------------- */
+/* Desktop: .run-u.is-X .run-u-dot   Phone: .u.X .dot */
+
+.run-u-dot,
+.u .dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--st-todo);
+}
+.run-u.is-running .run-u-dot,
+.u.running .dot {
+  background: var(--st-running);
+  box-shadow: none;
+}
+.run-u.is-done .run-u-dot,
+.u.done .dot {
+  background: var(--st-done);
+  box-shadow: none;
+}
+/* Shape, not only hue. Orange against amber is 1.44:1 and cannot carry this
+   alone. The triangle is a clip-path on the existing box, because the phone
+   renders every mark as a CSS box and has no SVG sprite to borrow from. */
+.run-u.is-blocked .run-u-dot,
+.u.blocked .dot {
+  background: var(--st-blocked);
+  box-shadow: none;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+/* A diamond, and no ring. The previous mark was a bone box with a 1px inset
+   orange ring, which at the 4px sub-agent size covers 12 of its 16 pixels — so
+   `failed` read as 75% orange against `running`'s 100%, at 1.00:1, the same hex.
+   Three states, three shapes: square runs, triangle blocks, diamond fails. */
+.run-u.is-failed .run-u-dot,
+.u.failed .dot {
+  background: var(--st-failed);
+  box-shadow: none;
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+
+/* ---- sub-agent marks --------------------------------------------------- */
+/* Same encoding at 4px. Desktop carries the state on the dot itself in one
+   place (.run-a-dot.is-X) and on the row in another (.run-a.is-X .run-a-dot). */
+
+.run-a-dot,
+.a .dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--st-todo);
+}
+.run-a-dot.is-running,
+.run-a.is-running .run-a-dot,
+.a.running .dot {
+  background: var(--st-running);
+  box-shadow: none;
+}
+.run-a-dot.is-done,
+.run-a.is-done .run-a-dot,
+.a.done .dot {
+  background: var(--st-done);
+  box-shadow: none;
+}
+.run-a-dot.is-blocked,
+.run-a.is-blocked .run-a-dot,
+.a.blocked .dot {
+  background: var(--st-blocked);
+  box-shadow: none;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+.run-a-dot.is-failed,
+.run-a.is-failed .run-a-dot,
+.a.failed .dot {
+  background: var(--st-failed);
+  box-shadow: none;
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+
+/* ---- labels ------------------------------------------------------------ */
+
+.run-u-label,
+.u .ul {
+  color: var(--lab-todo);
+}
+.run-u.is-running .run-u-label,
+.u.running .ul {
+  color: var(--lab-running);
+}
+.run-u.is-done .run-u-label,
+.u.done .ul {
+  color: var(--lab-done);
+}
+.run-u.is-blocked .run-u-label,
+.u.blocked .ul {
+  color: var(--lab-blocked);
+}
+.run-u.is-failed .run-u-label,
+.u.failed .ul {
+  color: var(--lab-failed);
+}
+
+/* A sub-agent that is still out reads brighter than one that has returned.
+   Previously both were --dim and a 4px dot at 2.42:1 was the only separator. */
+.run-a-label,
+.a .al {
+  color: var(--lab-todo);
+}
+.run-a.is-running .run-a-label,
+.a.running .al {
+  color: var(--lab-running);
+}
+.run-a.is-done .run-a-label,
+.a.done .al {
+  color: var(--lab-done);
+}
+/* runs.js validates an agent's state against the full unit vocabulary, so a
+   blocked or failed sub-agent is real. Without these two the blocked agent's
+   label rendered quieter than the running agent beside it, on the very row
+   where the block was. */
+.run-a.is-blocked .run-a-label,
+.a.blocked .al {
+  color: var(--lab-blocked);
+}
+.run-a.is-failed .run-a-label,
+.a.failed .al {
+  color: var(--lab-failed);
+}
+
+/* ---- session rows ------------------------------------------------------ */
+/* A session and a run are the same object at different detail levels, so their
+   rows share one vocabulary. Both surfaces' class names appear here for the same
+   reason the unit rules name both: the phone emits `.dot` and `.stag` where the
+   desktop emits `.sess-dot` and `.sess-tag`, and naming only one left every
+   phone session dot at --dimmer, 1.9:1, which this file's own header calls not
+   visibly rendered. The mapping is by meaning, not by name: `stalled`
+   takes the blocked mark because it is the state that wants the operator's eye,
+   and `unknown` takes the hollow todo mark because nothing is known about it —
+   which is exactly what a Kimi session, or one whose files cannot be read, is. */
+
+.sess-dot,
+.sess .dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--st-todo);
+}
+.sess.is-working .sess-dot,
+.sess.is-working .dot {
+  background: var(--st-running);
+  box-shadow: none;
+}
+.sess.is-stalled .sess-dot,
+.sess.is-stalled .dot {
+  background: var(--st-blocked);
+  box-shadow: none;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+.sess.is-idle .sess-dot,
+.sess.is-idle .dot {
+  background: var(--st-done);
+  box-shadow: none;
+}
+
+/* The tag repeats the mark in a word. Stalled is the only one that earns a
+   colour: a board where every row is coloured has no emphasis left to spend. */
+.sess.is-stalled .sess-tag,
+.sess.is-stalled .stag {
+  color: var(--lab-blocked);
+  border-color: var(--st-blocked);
+}
+
+/* ---- durations --------------------------------------------------------- */
+
+.dur.is-done { color: var(--dur-done); }
+.dur.is-running { color: var(--dur-running); }
+.dur.is-bad { color: var(--dur-bad); }
+
+/* ---- legend ------------------------------------------------------------ */
+/* Its own row beneath the panel header. The header is a 26px flex line whose
+   counter is already white-space:nowrap and can read
+   "05 RUNS · 02 SILENT · 01 NEEDS YOU", with no overflow rule and nothing to
+   clip a legend placed inside it. */
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  padding: 5px 0 7px;
+  font: 10px/1.4 var(--mono);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+/* Panel chrome is desktop-only. The phone has no panels, so the 16px inset put
+   the key 16px right of the heading directly above it and the rule drew a
+   divider across a page with nothing to divide. */
+.panel.runs .legend {
+  padding-left: 16px;
+  padding-right: 16px;
+  border-bottom: 1px solid var(--rule);
+}
+.legend i {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  vertical-align: baseline;
+}
+.legend span { white-space: nowrap; }
+
+/* The key draws from the same tokens as the rows, so it cannot describe an
+   encoding the board is not using. */
+.legend .is-todo { background: transparent; box-shadow: inset 0 0 0 1px var(--st-todo); }
+.legend .is-running { background: var(--st-running); }
+.legend .is-done { background: var(--st-done); }
+.legend .is-blocked {
+  background: var(--st-blocked);
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+.legend .is-failed {
+  background: var(--st-failed);
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}

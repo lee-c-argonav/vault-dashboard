@@ -170,8 +170,14 @@ test('a live session with no run file gets a line on the page', async () => {
     sessions: [{ pid: 777, tty: '/dev/ttys009', project: 'sprocket',
                  where: 'work/sprocket', since: iso(T0) }],
   }), 'utf8');
-  assert.match(body(html), /Not reporting/);
-  assert.match(body(html), /work\/sprocket/);
+  assert.match(body(html), /Sessions/);
+  // The path is GONE, deliberately. It used to publish `work/sprocket` to an
+  // unauthenticated URL, and one real value on this machine is a directory
+  // named after a confidential project codename. The line now answers the only
+  // question the phone is read for.
+  assert.doesNotMatch(body(html), /work\/sprocket/,
+    'a relative path reached the published page');
+  assert.match(body(html), /session 01/);
   assert.match(body(html), /NO STATUS/);
   await rm(root, { recursive: true, force: true });
   await rm(out, { recursive: true, force: true });
@@ -189,16 +195,17 @@ test('a session already accounted for by a run gets no second line', async () =>
     sessions: [{ pid: 777, tty: '/dev/ttys009', project: 'widget',
                  where: 'work/widget', since: iso(T0 - 60_000) }],
   }), 'utf8');
-  assert.doesNotMatch(body(html), /Not reporting/,
+  assert.doesNotMatch(body(html), /Sessions ·/,
     'the run row already describes that session in full');
   await rm(root, { recursive: true, force: true });
   await rm(out, { recursive: true, force: true });
 });
 
-test('no absolute path reaches the published page', async () => {
-  // The page is served to an unauthenticated GET, so a cwd outside $HOME must
-  // arrive as a bare leaf name. describeCwd enforces it; this asserts the whole
-  // pipeline honours it.
+test('no path of any kind reaches the published page', async () => {
+  // The rule used to be "no ABSOLUTE path", and a bare leaf name was allowed
+  // through. That is not enough: a leaf name is frequently the confidential
+  // thing, since repositories are named after the products they are. The
+  // projection now drops location entirely, so this asserts the stricter rule.
   const root = await vaultWith({});
   const out = await mkdtemp(join(tmpdir(), 'vhud-out-'));
   const { build } = await import('../status-page/build.js');
@@ -207,7 +214,8 @@ test('no absolute path reaches the published page', async () => {
     outDir: out,
     sessions: [{ pid: 777, tty: '/dev/ttys009', project: 'acme', where: '', since: iso(T0) }],
   }), 'utf8');
-  assert.match(body(html), /acme/);
+  assert.doesNotMatch(body(html), /acme/,
+    'a project leaf name reached the published page');
   assert.doesNotMatch(body(html), /\/Volumes|\/Users\//);
   await rm(root, { recursive: true, force: true });
   await rm(out, { recursive: true, force: true });

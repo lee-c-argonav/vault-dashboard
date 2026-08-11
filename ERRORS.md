@@ -174,3 +174,30 @@ a binary file looks like. When a symbol you can see in an editor cannot be found
 by search, check `file` before checking your assumptions — and note that a defect
 that leaves behaviour correct while making the code unsearchable will never be
 caught by a test suite that only runs the code.
+
+## 2026-08-11 — Deciding whether a sub-agent has finished, from its transcript
+**What didn't work:** Two content-shape rules in a row. First "the last entry has
+no `tool_use` block", which called 2,598 of 4,104 mid-flight boundaries finished
+across 35 real transcripts — 63% of boundaries and 90% of wall-clock time. Then a
+reviewer's refinement adding `stop_reason !== 'tool_use'`, which still misread 25%.
+Both fail for the same reason: an assistant turn is split across thinking, text and
+tool-call entries, and only the last carries a stop reason, so a mid-turn entry is
+byte-identical to a finished one.
+**What did:** Recency. The two shapes that are definitely mid-flight (a `user`
+tool_result, or an assistant entry carrying a tool call) are read from content; the
+ambiguous text-only tail is decided by whether the file has moved recently. A
+finished agent never writes again; a working one writes every few seconds. 0 false
+finishes, and 34 of 35 completed agents correctly finished.
+**Remember:** When the content of a record cannot distinguish two states, stop
+refining the predicate and ask what the filesystem already knows.
+
+## 2026-08-11 — Testing code that compares a passed-in clock to real file mtimes
+**What didn't work:** Anchoring the fixtures to a fixed date while the harness
+advanced its own `now`. Twice: first every fixture looked written in the future so
+staleness computed negative, then the shared clock drifted ten seconds per test
+until files were 200s "old" through the harness rather than the rule. Both times
+the suite was green or red for reasons that had nothing to do with the code.
+**What did:** Anchor the synthetic clock to the real one, and for cases that turn
+on recency, pin that case to `Date.now()` rather than the shared counter.
+**Remember:** A synthetic clock and a real filesystem is a mixed measurement.
+Anchor them together or the test measures the harness.

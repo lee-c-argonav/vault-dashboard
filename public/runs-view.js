@@ -65,6 +65,28 @@ export function stampLagMs(run) {
   return lag > STAMP_LAG_TOLERANCE_MS ? lag : 0;
 }
 
+/**
+ * A stamp claiming a time the clock has not reached yet.
+ *
+ * `stampLagMs` above measures `wrote - claimed` and returns 0 when the sign
+ * reverses, so it is blind to the opposite and worse error: a writer stamping
+ * the FUTURE. Measured on a live run on 2026-08-11 — its `updated` read 16:05Z,
+ * then 17:12Z forty minutes later, against a wall clock of 15:11Z, running 120
+ * minutes ahead and climbing. Liveness survives it because that is taken from
+ * the file's mtime, and every figure derived from `updated` does not.
+ *
+ * Reported through the SAME chip segment as the lag, never a second one. A
+ * five-segment chip already overflowed a 320px screen by 163px and put a
+ * sideways scrollbar on the published page; that regression is fixed and is not
+ * worth reopening for a rarer fault.
+ */
+export function stampAheadMs(run, now) {
+  const claimed = Date.parse(run.updated);
+  if (!Number.isFinite(claimed)) return 0;
+  const ahead = claimed - now;
+  return ahead > STAMP_LAG_TOLERANCE_MS ? ahead : 0;
+}
+
 // Quiet is a second axis, not a sixth state. A run that asked a question and
 // then crashed is still asking; hiding the silence behind the state is what
 // would let it claim to be alive.
@@ -228,11 +250,141 @@ export function linkSessions(runs, sessions) {
   };
 }
 
+/**
+ * What the LOAD gauge measures, and the equation behind it.
+ *
+ * WHAT IT REPLACED. One 2px tick per open todo, oldest first — 78 of them on this
+ * machine. That is a count of a queue, not a measure of load: it did not move when
+ * five agents started working, it did not move when a run stopped and waited for an
+ * answer, and it could not distinguish a quiet day with a long backlog from a
+ * saturated one. It also predated the panel's change of subject to agent runs.
+ *
+ * WHAT LOAD MEANS HERE: how much is demanding attention right now. The unit is one
+ * ATTENTION UNIT — roughly, one thing you would have to look at. Every term is a
+ * count of a real thing multiplied by how much of your attention one of them takes.
+ *
+ *     LOAD = Σ (count × weight)          measured in attention units
+ *     GAUGE = min(100, 100 × LOAD / CAPACITY)
+ *
+ * The weights are a judgment and are stated rather than hidden, so they can be
+ * argued with and retuned. Their ordering is the defensible part:
+ *
+ *   needsYou  3     work is STOPPED and only you can restart it. Nothing outranks it.
+ *   blocked   2     stopped on something; may or may not be yours to clear.
+ *   stalled   2     a process claiming to work and writing nothing. Needs a look.
+ *   context   1     each distinct project in flight is a context switch, which is
+ *                   the cost people consistently underestimate.
+ *   session   0.5   a live thread that is running fine. Real, but light.
+ *   fanout    0.75  × SQRT of agents out, not the count. Supervision is sublinear:
+ *                   you attend to the batch, so 36 agents is six units and not
+ *                   thirty-six. Without the root, one fan-out drowns every other term.
+ *
+ * NO TODO TERM. Overdue and due-today were in the first version and came out at
+ * The operator's call: the todo system is not in use, so counting it manufactured
+ * load nobody was carrying — six overdue items were the single largest term on a live
+ * board, outweighing three working sessions. This also settles the inconsistency
+ * the project hub has recorded since 2026-08-06, where the panel changed subject to
+ * agent runs and its gauges stayed todo-driven.
+ *
+ * CAPACITY is 8 attention units — a full plate. Past it the gauge pegs, because a
+ * bar that keeps growing stops being readable exactly when it matters most.
+ */
+export const LOAD_WEIGHTS = {
+  needsYou: 3, blocked: 2, stalled: 2, context: 1, session: 0.5, fanout: 0.75,
+};
+export const LOAD_CAPACITY = 8;
+
+const AGENT_OUT = new Set(['running', 'stalled', 'open']);
+
+/**
+ * The gauge, its total, and every term that produced it.
+ *
+ * Returns the composition rather than a bare number, because a single figure with
+ * no decomposition is not actionable: "load is 61" tells you nothing you can act
+ * on, and "3 of that is a run waiting on you" tells you what to do next.
+ */
+export function loadModel(state, now = Date.now()) {
+  const runs = state.runs ?? [];
+  const sessions = state.sessions ?? [];
+  // Both halves. A session attached to a run is still a live thread.
+  const live = [...sessions, ...runs.map((r) => r?.session).filter(Boolean)];
+  const busy = live.filter((s) => s.status && s.status !== 'idle');
+
+  const agentsOut = live.reduce(
+    (n, s) => n + (s.agents ?? []).filter((a) => AGENT_OUT.has(a.state)).length, 0,
+  );
+
+  const raw = [
+    ['needsYou', 'NEEDS YOU', runs.reduce((n, r) => n + (r?.needsInput?.length ?? 0), 0), 'hot'],
+    // Guarded. `runState` dereferences `needsInput` and `units`, and this gauge
+    // renders on every parse including the partial refresh, so a run that is
+    // half-shaped for one tick must cost that term and not the whole panel.
+    ['blocked', 'BLOCKED', runs.filter((r) => {
+      try { return runState(r) === 'blocked'; } catch { return false; }
+    }).length, 'warn'],
+    ['stalled', 'STALLED', live.filter((s) => s.status === 'stalled').length, 'warn'],
+    ['context', 'CONTEXTS', new Set(busy.map((s) => s.project || '—')).size, 'live'],
+    ['session', 'SESSIONS', live.filter((s) => s.status === 'working').length, 'live'],
+    ['fanout', 'AGENTS OUT', agentsOut, 'live'],
+  ];
+
+  const terms = raw.map(([key, label, count, cls]) => ({
+    key,
+    label,
+    count,
+    weight: LOAD_WEIGHTS[key],
+    // Fan-out is the one sublinear term; see the header.
+    points: key === 'fanout'
+      ? LOAD_WEIGHTS.fanout * Math.sqrt(Math.max(0, count))
+      : LOAD_WEIGHTS[key] * count,
+    cls,
+  })).filter((t) => t.count > 0);
+
+  const score = terms.reduce((n, t) => n + t.points, 0);
+  return {
+    score,
+    capacity: LOAD_CAPACITY,
+    pct: Math.min(100, (100 * score) / LOAD_CAPACITY),
+    over: score > LOAD_CAPACITY,
+    // Heaviest first: what to look at, not what happens to be listed first.
+    terms: terms.sort((a, b) => b.points - a.points),
+  };
+}
+
+/** The one-line caption under the bar. Counts, not points: the number a person
+ *  can verify by looking at the board. */
+export function loadCaption(model) {
+  return model.terms.map((t) => `${t.count} ${t.label}`).join(' · ');
+}
+
 /** How long a session has been up, for the one line it gets. */
 export function sessionText(s, now) {
   const t = Date.parse(s.since);
   const up = Number.isFinite(t) ? humanMs(Math.max(0, now - t)) : '--';
   return `${s.where || s.project || 'unknown'} · ${up}`;
+}
+
+/**
+ * What a session is doing, in the slot a run row uses for its note.
+ *
+ * Says LAST rather than naming a current tool, because a tool call reaches disk
+ * with its result and not before it — so the current tool is not knowable and a
+ * row claiming otherwise would be inventing it.
+ */
+export function sessionActivity(s) {
+  const bits = [];
+  if (s.status === 'stalled') bits.push('SILENT');
+  // 'open' is in the out set too. agentState returns it for an agent whose
+  // transcript has no message yet, which is precisely a just-dispatched one —
+  // counting it as done reported "01 AGENTS DONE" about an agent two seconds old.
+  const OUT = new Set(['running', 'stalled', 'open']);
+  const out = (s.agents ?? []).filter((a) => OUT.has(a.state));
+  if (out.length) bits.push(`${out.length} AGENT${out.length === 1 ? '' : 'S'} OUT`);
+  else if ((s.agents ?? []).length) bits.push(`${s.agents.length} AGENTS DONE`);
+  if (s.agentsCapped) bits.push(`+${s.agentsCapped} MORE`);
+  if (s.lastTool) bits.push(`LAST ${s.lastTool.replace(/^mcp__[^_]+__/, '')}`);
+  if (s.branch) bits.push(s.branch);
+  return bits.join(' · ');
 }
 
 /**
@@ -410,8 +562,13 @@ export function stateText(run, now, session = null) {
   // A stamp that trails its own file is named, because every duration on the row
   // derived from it is wrong by that much and the writer is the only one who can
   // fix it.
+  // One segment, two directions. AHEAD outranks BEHIND: a stamp in the future
+  // is the writer reading no clock at all, which makes every other figure it
+  // wrote suspect, where a lag only makes them late.
+  const ahead = stampAheadMs(run, now);
   const lag = stampLagMs(run);
-  if (lag) head = `${head} · STAMPS ${humanMs(lag)} BEHIND`;
+  if (ahead) head = `${head} · STAMPS ${humanMs(ahead)} AHEAD`;
+  else if (lag) head = `${head} · STAMPS ${humanMs(lag)} BEHIND`;
   const q = quietMs(run, now);
   // A missing or malformed stamp is a writer bug, not silence. Rendering it as
   // "QUIET --" both reads as nothing and dims a run that may be perfectly alive.
@@ -499,7 +656,11 @@ export function durationOf(x, now, batched = null) {
         `Running now, but its recorded start is ${humanMs(-ms)} ahead of the clock (${x.started}), so no elapsed time can be computed. The writing session's clock is wrong.`,
         'running');
     }
-    return cell(humanMs(ms), false, '', 'running');
+    // The leading + marks the tense. This column carries two different claims —
+    // "took 3m and finished" and "has been running 47m so far" — in the same
+    // format, and colour was the only thing separating them at 1.60:1. One
+    // character says which, survives monochrome, and needs no legend.
+    return cell(`+${humanMs(ms)}`, false, '', 'running');
   }
   // failed and blocked are already carried by the dot, so the cell stays empty
   // rather than repeating the state as if it were a measurement.
@@ -517,6 +678,30 @@ export const UNIT_TAIL = 2;
 export const EXPAND_LIMIT = 5;
 
 export const URGENCY = { 'needs-input': 0, blocked: 1, running: 2, paused: 3, done: 4 };
+
+/**
+ * One rank over runs and sessions together.
+ *
+ * The two used to live in separate sections and never needed comparing. Merged,
+ * they do, and `URGENCY` cannot answer it: a session state is not one of its
+ * five keys, so `URGENCY[undefined]` is `undefined`, and `undefined - undefined`
+ * is NaN — which makes the sort order depend on input order rather than failing
+ * visibly.
+ *
+ * Interleaved rather than stacked, because a stalled session outranks a merrily
+ * running run: one of them may be dead and the other is fine.
+ *
+ *   0/1 needs-input run      5 working session
+ *   2/3 blocked run          6/7 paused run
+ *   3   stalled session      7   idle session
+ *   4/5 running run          8/9 done run
+ */
+const SESSION_RANK = { stalled: 3, working: 5, idle: 7, unknown: 9 };
+
+export function mergedRank(item) {
+  if (item.runId) return (URGENCY[runState(item)] ?? 9) * 2 + (blockedNote(item) ? 0 : 1);
+  return SESSION_RANK[item.status] ?? 9;
+}
 
 /**
  * Which runs render in full and which collapse. Urgency decides, so whatever

@@ -128,6 +128,14 @@ body {
 }
 
 .pbody { height: calc(100% - 27px); min-height: 0; }
+
+/* The runs panel has a third child, the state key, and the arithmetic above
+   subtracts only the 26px header — so the list overflowed its panel by exactly
+   the key's height and the last row of a scrolled list sat under the footer.
+   Flex rather than a second magic number, because the key wraps to two lines at
+   narrow widths and any constant would be wrong again there. */
+.panel.runs { display: flex; flex-direction: column; }
+.panel.runs .pbody { flex: 1 1 auto; height: auto; min-height: 0; }
 .scroll { overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
 
 .scroll::-webkit-scrollbar { width: 8px; }
@@ -410,13 +418,62 @@ body {
 }
 .focus-text code { font: 15px/1 var(--mono); color: var(--dim); }
 
-.load { display: flex; align-items: center; gap: 10px; margin-top: auto; padding-bottom: 10px; }
+/* The load gauge. One segment per contributing term, width proportional to the
+   attention units it contributes, against a track that is the full capacity — so
+   the empty tail is real headroom rather than a normalisation that always fills.
+   The equation is in loadModel (runs-view.js) and every segment carries its own
+   arithmetic in a title. */
+.load { display: flex; align-items: center; gap: 10px; margin-top: auto; }
 .load-k { font: 9px/1 var(--mono); letter-spacing: .16em; color: var(--dim); flex: 0 0 auto; }
-.load-strip { display: flex; align-items: flex-end; gap: 2px; height: 12px; overflow: hidden; }
-.load-strip i { display: block; width: 2px; height: 6px; background: var(--dimmer); flex: 0 0 auto; }
-.load-strip i.stale { height: 12px; background: var(--orange-dim); }
-.load-strip i.due { height: 12px; background: var(--orange); }
-.load-strip i.sched { height: 3px; background: var(--rule-hot); }
+
+.load-n {
+  flex: 0 0 auto;
+  min-width: 26px;
+  font: 15px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .02em;
+  color: var(--bone);
+  text-align: right;
+}
+.load-n.over { color: var(--orange); }
+
+.load-strip {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  height: 10px;
+  min-width: 0;
+  /* The track. A hairline rather than a fill, so an empty gauge reads as empty
+     and not as a bar of some other colour. */
+  box-shadow: inset 0 0 0 1px var(--rule-hot);
+  padding: 1px;
+  overflow: hidden;
+}
+.load-strip i.seg { display: block; height: 100%; flex: 0 0 auto; min-width: 1px; background: var(--dimmer); }
+/* Same encoding as everywhere else: orange is live work, amber wants a look,
+   and the thing that has stopped and is waiting on you is the brightest. */
+.load-strip i.is-live { background: var(--orange-dim); }
+/* Adjacent live terms alternate one step, so the composition is readable as
+   segments rather than as one long bar. The caption lists the same terms in the
+   same order, heaviest first, which is what maps a segment to its name. */
+.load-strip i.is-live:nth-child(even) { background: var(--orange); opacity: .55; }
+.load-strip i.is-warn { background: var(--amber); }
+.load-strip i.is-hot  { background: var(--orange); }
+.load-strip.over { box-shadow: inset 0 0 0 1px var(--orange); }
+
+/* The composition in words. A bare number is not actionable; this is the line
+   that says which term to go and look at. */
+.load-cap {
+  margin: 5px 0 10px;
+  font: 9px/1.4 var(--mono);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* The one number that says what is wrong. Orange when it is a pressure metric,
    bone when the answer is simply "this is the backlog". */
@@ -588,12 +645,9 @@ body {
   align-items: baseline;
   padding: 4px 0;
 }
-.run-u-dot { width: 6px; height: 6px; align-self: center; background: var(--rule-hot); }
-.run-u.is-done .run-u-dot { background: var(--bone); }
-.run-u.is-running .run-u-dot { background: var(--orange); }
-.run-u.is-blocked .run-u-dot { background: var(--amber); }
-/* Not orange: that is the running colour, and a failed unit must be findable. */
-.run-u.is-failed .run-u-dot { background: var(--bone); box-shadow: inset 0 0 0 1px var(--orange); }
+/* Geometry only. Colour and shape per state live in tokens.css, which is the one
+   place the encoding is defined and is shared with the phone renderer. */
+.run-u-dot { width: 6px; height: 6px; align-self: center; }
 
 /* nowrap: real ids run to `4.0c-1`, and a wrapped id breaks the row rhythm of
    the whole list. Truncates rather than reflows. */
@@ -605,19 +659,13 @@ body {
 }
 .run-u-label {
   font: 13px/1.45 var(--sans);
-  color: var(--dim);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.run-u.is-done .run-u-label, .run-u.is-running .run-u-label { color: var(--bone); }
 
 /* Subagents. A cluster of dots rides the unit row so a fan-out is visible
    without costing a line, and the names appear only under the running unit. */
 .run-u-agents { display: inline-flex; gap: 3px; align-items: center; margin-left: 2px; }
-.run-a-dot { width: 4px; height: 4px; background: var(--rule-hot); flex: none; }
-.run-a-dot.is-running { background: var(--orange); }
-.run-a-dot.is-done { background: var(--bone); }
-.run-a-dot.is-blocked { background: var(--amber); }
-.run-a-dot.is-failed { background: var(--bone); box-shadow: inset 0 0 0 1px var(--orange); }
+.run-a-dot { width: 4px; height: 4px; flex: none; }
 
 /* Indented past the label column, one step dimmer, so these read as belonging
    to the unit above rather than competing with it. */
@@ -628,17 +676,11 @@ body {
   align-items: baseline;
   padding: 2px 0 2px 81px;
 }
-.run-a.is-running .run-a-dot { background: var(--orange); }
-.run-a.is-done .run-a-dot { background: var(--bone); }
-.run-a.is-blocked .run-a-dot { background: var(--amber); }
-.run-a.is-failed .run-a-dot { background: var(--bone); box-shadow: inset 0 0 0 1px var(--orange); }
 
 .run-a-label {
   font: 12px/1.45 var(--sans);
-  color: var(--text-3);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.run-a.is-running .run-a-label, .run-a.is-done .run-a-label { color: var(--dim); }
 
 /* One duration component, used by units and by sub-agents. They are the same
    quantity, so they get one rule set: two copies is how they drifted apart in
@@ -652,17 +694,24 @@ body {
   white-space: nowrap;
   color: var(--text-3);
 }
-.dur.is-done    { color: var(--dim); }
-.dur.is-running { color: var(--orange); }
-/* An anomaly is not a measurement. Amber outranks both above it. */
-/* One colour for a missing duration, whatever the state. Running or finished,
-   the answer is the same: we cannot tell you. */
-.dur.is-bad { color: var(--amber); }
+/* Per-state colour is in tokens.css. An anomaly is not a measurement, so
+   --dur-bad outranks both of the others there. */
 
 /* Last track in a unit row, last in an agent row. Without an explicit column a
    row with no agent cluster auto-places it 92px early. */
 .run-u .dur { grid-column: 5; }
 .run-a .dur { grid-column: 3; }
+
+/* Observed fan-out, beneath the units and above the footer. Row-scoped because
+   nothing on disk maps a sub-agent to a unit; the declared per-unit clusters
+   still render above when a run file carries them. */
+.run-agents { margin-top: 9px; }
+.run-agents-head {
+  padding: 3px 0 3px 81px;
+  font: 10px/1.4 var(--mono);
+  letter-spacing: .1em;
+  color: var(--text-3);
+}
 
 /* Overflow markers at either end of the window, so a hidden unit is visible as
    a count rather than silently absent. */
@@ -866,11 +915,12 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Geometry only; the state colour and shape come from tokens.css, so a session
+   row and a unit row say the same thing the same way. */
 .sess-dot {
   flex: 0 0 auto;
   width: 5px; height: 5px;
   align-self: center;
-  background: var(--dimmer);
 }
 .sess-label {
   flex: 1 1 auto;

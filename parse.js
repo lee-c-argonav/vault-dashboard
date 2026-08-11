@@ -5,9 +5,50 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { readRunsDetailed } from './runs.js';
+import { readRunsDetailed, readFinishedRunsDetailed } from './runs.js';
 import { partitionRuns, linkSessions, sessionContext } from './public/runs-view.js';
 import { readSessions } from './sessions.js';
+import { readTranscripts } from './transcripts.js';
+
+/**
+ * Which sessions are alive, what each is doing, and which run belongs to which.
+ *
+ * Factored out of parseVault so a transcript event can refresh this WITHOUT
+ * re-walking the vault. A busy session with a fan-out appends several times a
+ * second; routing that through the full parse re-reads every note and rebuilds
+ * the graph — measured at 110ms cold and 17ms warm plus a ~150KB broadcast per
+ * push, roughly three full parses a second, driven by files the vault parse
+ * never opens.
+ *
+ * @param {object[]} activeRuns  live runs, already partitioned
+ * @param {object[]} finishedRuns  for the goal-recall line only
+ */
+export async function observeSessions(activeRuns, finishedRuns, nowMs) {
+  const live = await readSessions();
+  const linked = linkSessions(activeRuns, live);
+  // What each session is actually doing, read from its own files. Keyed by pid
+  // and merged onto BOTH halves: a session that publishes a run still benefits
+  // from observed fan-out, because a run file's declared `units[].agents` has
+  // been measured wrong by the whole quantity — 8 declared and running against
+  // 27 on disk with every one finished.
+  const observed = await readTranscripts(live, { now: nowMs });
+  // A session with no live run may still have published one that just finished.
+  // Without this the best-described session on the board becomes the emptiest
+  // row on it the moment its work completes.
+  const sessions = linked.unpublished.map((s) => ({
+    // linked.runs, not the raw read: the guard in sessionContext keys on
+    // `.session`, which only exists after linking.
+    ...s,
+    context: sessionContext(s, linked.runs.concat(finishedRuns), nowMs),
+    ...(observed.get(s.pid) ?? {}),
+  }));
+  // A run's session carries the same detail, so a run row can say the process
+  // behind it has been silent for forty minutes while the file claims RUNNING.
+  const runs = linked.runs.map((r) => (r.session
+    ? { ...r, session: { ...r.session, ...(observed.get(r.session.pid) ?? {}) } }
+    : r));
+  return { runs, sessions };
+}
 
 const SCANNED_DIRS = [
   '00-Inbox', '10-Projects', '20-Research', '30-Reading',
@@ -245,16 +286,18 @@ export default async function parseVault(vaultPath) {
   // A run file is the only thing that ever put a session on this board, and
   // writing one is opt-in, so most sessions appeared nowhere. Observed liveness
   // is the floor under that.
-  const linked = linkSessions(runsRead.active, await readSessions());
-  // A session with no live run may still have published one that just finished.
-  // Without this the best-described session on the board becomes the emptiest
-  // row on it the moment its work completes.
-  const sessionsOut = linked.unpublished.map((s) => ({
-    // linked.runs, not the raw read: the guard in sessionContext keys on
-    // `.session`, which only exists after linking.
-    ...s, context: sessionContext(s, linked.runs.concat(
-      runsDetail.runs.filter((r) => r.state === 'done')), now.getTime()),
-  }));
+  // The ARCHIVE too, not just 15-Runs. A session that closed its run out and
+  // moved the file to 99-Archive/runs — step 9 of /close — got no goal-recall
+  // line and rendered NO STATUS. The phone's readBoard has partitioned against
+  // the archive since 2026-08-10 and the desktop never did, so the two surfaces
+  // disagreed about the case the recall line exists for.
+  const archived = await readFinishedRunsDetailed(root).catch(() => ({ runs: [] }));
+  const { runs: linkedRuns, sessions: sessionsOut } = await observeSessions(
+    runsRead.active,
+    runsDetail.runs.filter((r) => r.state === 'done').concat(archived.runs ?? []),
+    now.getTime(),
+  );
+  const linked = { runs: linkedRuns };
   if (runsDetail.unreadable) {
     warnings.push(`cannot read ${path.join(root, '15-Runs')} — no run can appear`);
   }
@@ -414,6 +457,11 @@ export default async function parseVault(vaultPath) {
     runs: linked.runs,
     // Live sessions that are publishing nothing. One line each; see sessions.js.
     sessions: sessionsOut,
+    // Carried on State so the partial refresh can feed sessionContext the same
+    // finished runs a full parse would. Passing [] made a just-closed session's
+    // goal-recall line appear on the 10s parse and vanish on the next transcript
+    // write, oscillating for as long as the session kept working.
+    finishedRuns: runsDetail.runs.filter((r) => r.state === 'done'),
     health: {
       notes: notes.length,
       links: linkCount,

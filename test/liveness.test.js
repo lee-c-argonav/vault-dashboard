@@ -20,7 +20,7 @@ import { mkdtemp, mkdir, writeFile, rm, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readRuns } from '../runs.js';
-import { quietMs, stampLagMs, stateText, STALE_MS } from '../public/runs-view.js';
+import { quietMs, stampLagMs, stampAheadMs, stateText, STALE_MS } from '../public/runs-view.js';
 
 const T0 = Date.parse('2026-08-06T14:00:00.000Z');
 const min = (n) => n * 60_000;
@@ -80,4 +80,26 @@ test('readRuns reports when each file was last written', async () => {
   const [run] = await readRuns(root);
   assert.equal(run.wrote, when.toISOString());
   await rm(root, { recursive: true, force: true });
+});
+
+// A stamp claiming a time the clock has not reached. The live case that
+// prompted this read `updated` 120 minutes into the future and climbing, while
+// stampLagMs measured the opposite sign and reported zero.
+test('a stamp ahead of the clock is detected and named', () => {
+  const now = Date.parse('2026-08-11T15:11:00Z');
+  const r = base({
+    updated: '2026-08-11T17:12:00Z',
+    wrote: '2026-08-11T14:31:00Z',
+    state: 'running',
+  });
+  assert.equal(stampLagMs(r), 0, 'the old check cannot see a future stamp');
+  assert.ok(stampAheadMs(r, now) > 0);
+  assert.match(stateText(r, now), /STAMPS .* AHEAD/);
+  assert.doesNotMatch(stateText(r, now), /BEHIND/, 'both directions on one chip');
+});
+
+test('a stamp a few seconds ahead is normal and is not reported', () => {
+  const now = Date.parse('2026-08-11T15:11:00Z');
+  const r = base({ updated: '2026-08-11T15:11:05Z', wrote: '2026-08-11T15:11:00Z' });
+  assert.equal(stampAheadMs(r, now), 0);
 });

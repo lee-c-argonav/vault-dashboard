@@ -6,7 +6,7 @@
 // Both import it so the two surfaces cannot disagree about whether a run is
 // waiting on you. Liveness lives here, not in State: State is diffed by
 // stringify below, so a clock-derived field would look changed on every push.
-import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText }
+import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText, sessionActivity, mergedRank, loadModel, loadCaption }
   from './runs-view.js';
 
 const STATE_SOURCES = ['/api/state'];
@@ -107,22 +107,27 @@ function renderHeader(state) {
   $('h-date').textContent = state.today;
   $('h-day').textContent = state.todayLabel;
 
-  // OPEN is a near-constant and DONE is good news; neither is a pressure signal.
-  // Everything else goes orange the moment it is non-zero, which is what makes
-  // the header say something rather than merely report.
+  // Read from the load model, so the header and the gauge can never disagree
+  // about how many sessions are alive.
+  //
+  // RUNS, SESSIONS and AGENTS are volume and stay neutral however large they get:
+  // eight agents working is not a problem. STALLED and NEEDS YOU go orange the
+  // moment they are non-zero, because both mean something has stopped.
+  const load = loadModel(state, Date.now());
+  const term = (k) => load.terms.find((t) => t.key === k)?.count ?? 0;
   const cells = [
-    ['s-open', state.stats.open, false],
-    ['s-stale', state.stats.stale, true],
-    ['s-due', state.stats.dueToday, true],
-    ['s-over', state.stats.overdue, true],
-    ['s-done', state.stats.doneToday, false],
+    ['s-runs', (state.runs ?? []).length, false],
+    ['s-sessions', term('session'), false],
+    ['s-agents', term('fanout'), false],
+    ['s-stalled', term('stalled'), true],
+    ['s-needs', term('needsYou'), true],
   ];
   for (const [id, value, hotWhenSet] of cells) {
     const node = $(id);
     node.textContent = pad2(value);
     node.className = 'cell-v' + (value === 0 ? ' zero' : hotWhenSet ? ' hot' : '');
   }
-  flashIfChanged($('p-head'), state.stats);
+  flashIfChanged($('p-head'), cells.map((c) => c[1]));
 }
 
 // ── focus + load gauge ───────────────────────────────────────────────────────
@@ -145,52 +150,101 @@ function renderFocus(state) {
   }
   $('focus-src').textContent = `40-DAILY/${state.today}`;
 
-  // One tick per open todo, oldest first: the burden gauge.
-  const ticks = state.groups
-    .flatMap((g) => g.todos)
-    .filter((t) => !t.done)
-    .sort((a, b) => (b.ageDays ?? -Infinity) - (a.ageDays ?? -Infinity));
+  // The load gauge. One segment per contributing term, width proportional to the
+  // attention units it contributes, heaviest first. See loadModel in runs-view.js
+  // for the equation and the reasoning behind every weight.
+  //
+  // Composed rather than totalled, because a bare number is not actionable: "load
+  // is 63" says nothing you can do, and "3 of that is a run waiting on you" says
+  // exactly what to do next. The previous version was one tick per open todo, 78
+  // of them, which measured a queue nobody was working from.
+  const load = loadModel(state, Date.now());
+  const n = $('load-n');
+  n.textContent = String(Math.round(load.pct));
+  n.classList.toggle('over', load.over);
+  n.title = `${load.score.toFixed(1)} of ${load.capacity} attention units\n`
+    + load.terms.map((t) => `${t.label}: ${t.count} × ${t.weight}`
+      + `${t.key === 'fanout' ? ' (√, supervision is sublinear)' : ''}`
+      + ` = ${t.points.toFixed(2)}`).join('\n');
 
-  $('load-strip').replaceChildren(
-    ...ticks.map((t) => {
-      const tick = el('i');
-      if (t.scheduled) tick.className = 'sched';
-      else if (t.dueState === 'today' || t.dueState === 'overdue') tick.className = 'due';
-      else if (t.ageDays >= 1) tick.className = 'stale';
-      return tick;
-    }),
-  );
-  flashIfChanged($('p-focus'), [state.focus, ticks.length]);
+  const strip = $('load-strip');
+  strip.replaceChildren(...load.terms.map((t) => {
+    const seg = el('i', `seg is-${t.cls}`);
+    // Percent of CAPACITY, so the bar's empty tail is real headroom rather than
+    // a normalisation that always fills.
+    seg.style.width = `${Math.min(100, (100 * t.points) / load.capacity)}%`;
+    seg.title = `${t.label}: ${t.count} × ${t.weight} = ${t.points.toFixed(2)} of ${load.capacity}`;
+    return seg;
+  }));
+  strip.classList.toggle('over', load.over);
+  $('load-cap').textContent = loadCaption(load) || 'nothing running';
+  // The gauge's composition, not a todo count. Points are rounded so the panel
+  // does not flash on a sub-integer drift in the fan-out square root.
+  flashIfChanged($('p-focus'), [state.focus, Math.round(load.score * 10),
+    load.terms.map((t) => `${t.key}${t.count}`).join(',')]);
 }
 
 // ── hero: the one number that says what is wrong ──────────────────────────────
 
+/**
+ * The one number that most deserves the biggest type on the board.
+ *
+ * Ordered by what has STOPPED, then by what is moving. Every branch used to read
+ * from the todo system — OVERDUE, DUE TODAY, STALE, OPEN — which no longer
+ * reflects anything anyone works from.
+ */
 function heroFor(state) {
-  const open = state.groups.flatMap((g) => g.todos).filter((t) => !t.done);
-  const firstDue = (dueState) => open.find((t) => t.dueState === dueState);
+  const runs = state.runs ?? [];
+  const live = [...(state.sessions ?? []), ...runs.map((r) => r.session).filter(Boolean)];
+  const OUT = new Set(['running', 'stalled', 'open']);
 
-  if (state.stats.overdue > 0) {
-    const t = firstDue('overdue');
-    return { label: 'OVERDUE', n: state.stats.overdue, sub: t ? `${t.due} — ${clip(plain(t.text), 46)}` : '' };
-  }
-  if (state.stats.dueToday > 0) {
-    const t = firstDue('today');
-    return { label: 'DUE TODAY', n: state.stats.dueToday, sub: t ? clip(plain(t.text), 52) : '' };
-  }
-  if (state.stats.stale > 0) {
-    const oldest = state.rolledOver[0];
+  const asks = runs.flatMap((r) => (r.needsInput ?? []).map((q) => ({ q, r })));
+  if (asks.length) {
     return {
-      label: 'STALE',
-      n: state.stats.stale,
-      sub: oldest ? `OLDEST ${pad2(oldest.ageDays)}D — ${clip(plain(oldest.text), 44)}` : '',
+      label: 'NEEDS YOU',
+      n: asks.length,
+      sub: clip(plain(asks[0].q.question ?? asks[0].r.goal ?? ''), 52),
     };
   }
-  return {
-    label: 'OPEN',
-    n: state.stats.open,
-    calm: true,
-    sub: `${pad2(state.groups.length)} GROUPS · NOTHING DUE OR STALE`,
-  };
+
+  const stalled = live.filter((s) => s.status === 'stalled');
+  if (stalled.length) {
+    return {
+      label: 'STALLED',
+      n: stalled.length,
+      sub: `${clip(stalled[0].name || stalled[0].project || 'a session', 28)} — BUSY AND WRITING NOTHING`,
+    };
+  }
+
+  const blocked = runs.filter((r) => runState(r) === 'blocked');
+  if (blocked.length) {
+    return { label: 'BLOCKED', n: blocked.length, sub: clip(plain(blocked[0].goal ?? ''), 52) };
+  }
+
+  const out = live.flatMap((s) => (s.agents ?? []).filter((a) => OUT.has(a.state)));
+  if (out.length) {
+    // Oldest first: the one that has been out longest is the one worth naming.
+    const oldest = out.slice().sort((a, b) =>
+      String(a.started ?? '').localeCompare(String(b.started ?? '')))[0];
+    return {
+      label: 'AGENTS OUT',
+      n: out.length,
+      sub: oldest?.label ? `OLDEST — ${clip(oldest.label, 44)}` : '',
+    };
+  }
+
+  const working = live.filter((s) => s.status === 'working');
+  if (working.length) {
+    const contexts = new Set(working.map((s) => s.project || '—')).size;
+    return {
+      label: 'WORKING',
+      n: working.length,
+      calm: true,
+      sub: `${pad2(contexts)} ${contexts === 1 ? 'CONTEXT' : 'CONTEXTS'} · NOTHING WAITING ON YOU`,
+    };
+  }
+
+  return { label: 'IDLE', n: live.length, calm: true, sub: 'NO AGENT IS WORKING' };
 }
 
 function renderHero(state) {
@@ -344,6 +398,20 @@ function runRow(r, now, expanded = true) {
 
   if (r.units.length) row.append(unitList(r.units, now));
 
+  // Observed sub-agents, at ROW level.
+  //
+  // They have to live here rather than under a unit, because nothing on disk
+  // maps a sub-agent to a unit — the sidecar carries a tool-use id and no unit
+  // id. The declared `units[].agents` field is unit-scoped and still renders
+  // above for any run file that carries it.
+  //
+  // Without this the run row lost its fan-out entirely the moment an agent
+  // followed the new standard and stopped writing `units[].agents`, which is
+  // information removed rather than moved. The run row is where the operator
+  // looks to see whether the work is progressing.
+  const observed = r.session?.agents ?? [];
+  if (observed.length) row.append(agentList(observed, r.session.agentsCapped ?? 0, now));
+
   // Clicking anywhere in the row focuses the Terminal tab this run is executing
   // in. Agents share their parent's terminal, so a sub-row does the same thing.
   // Only the runId crosses the wire; the server resolves the tty from the run's
@@ -379,20 +447,31 @@ function runRow(r, now, expanded = true) {
  * osascript. Same rule as `run:`; see run-terminal.js.
  */
 function sessionRow(s, now) {
-  const row = el('div', 'sess' + (s.context ? ' has-ctx' : ''));
+  const activity = sessionActivity(s);
+  // Both, not one. `activity || context` dropped the goal-recall line — what the
+  // session last published — the moment there was any observed activity to show,
+  // which is exactly when a session is most worth reading about.
+  const sub = [activity, s.context].filter(Boolean).join('  ·  ');
+  const row = el('div', `sess is-${s.status || 'unknown'}${sub ? ' has-ctx' : ''}`);
   const head = el('div', 'sess-head');
   head.append(el('i', 'sess-dot'));
-  const label = el('span', 'sess-label', sessionText(s, now));
+  // The session's own name leads, and the path follows it, so this row answers
+  // "which session" the way a run row answers "which run" — with a name rather
+  // than a location. NO STATUS rows were a path and an uptime and nothing else.
+  const label = el('span', 'sess-label', s.name ? `${s.name} · ${sessionText(s, now)}` : sessionText(s, now));
   label.title = `${s.where || s.project} · pid ${s.pid} · ${s.tty}`;
   head.append(label);
-  // IDLE, not NO STATUS, when we know what it last did. The two say different
-  // things: one is a session we have never heard from, the other is a session
-  // between pieces of work.
-  head.append(el('span', 'sess-tag', s.context ? 'IDLE' : 'NO STATUS'));
+  // The process's own answer where there is one. NO STATUS is now reserved for
+  // a session that could not be joined at all — a Kimi session, or one whose
+  // files are unreadable — rather than being the default for everything.
+  head.append(el('span', 'sess-tag', (s.status || (s.context ? 'idle' : 'no status')).toUpperCase()));
   row.append(head);
-  if (s.context) {
-    const ctx = el('div', 'sess-ctx', s.context);
-    ctx.title = s.context;
+  if (sub) {
+    const ctx = el('div', 'sess-ctx', sub);
+    // `sub`, not `s.context`. The line clips with an ellipsis and the tooltip is
+    // the only way to read the rest, so showing half of what was clipped made the
+    // activity half unreachable.
+    ctx.title = sub;
     row.append(ctx);
   }
   row.dataset.sessionPid = String(s.pid);
@@ -422,6 +501,40 @@ async function openSessionTerminal(pid, row) {
   setTimeout(() => find().classList.remove('hit', 'miss'), 900);
 }
 
+/**
+ * A run's live fan-out, read from disk rather than declared.
+ *
+ * Named rows for the agents still out, because those are the ones the operator
+ * can act on, and a single counted line for the ones that have returned — the
+ * same shape the unit list already uses, where names appear only under the unit
+ * actually running. A 35-agent run rendered in full is a 35-row list.
+ */
+function agentList(agents, capped, now) {
+  const wrap = el('div', 'run-agents');
+  const OUT = new Set(['running', 'stalled', 'open']);
+  const out = agents.filter((a) => OUT.has(a.state));
+  const done = agents.length - out.length;
+
+  const head = el('div', 'run-agents-head');
+  head.append(el('span', 'run-agents-k',
+    `${pad2(out.length)} OUT · ${pad2(done)} BACK${capped ? ` · +${capped} MORE` : ''}`));
+  wrap.append(head);
+
+  for (const a of out) {
+    const sub = el('div', `run-a is-${a.state === 'open' ? 'running' : a.state}`);
+    sub.append(el('i', 'run-a-dot'));
+    const label = el('span', 'run-a-label', a.label || a.agentType || a.id);
+    label.title = `${a.label || a.id}${a.depth > 1 ? ` · nested, depth ${a.depth}` : ''}`;
+    sub.append(label);
+    const d = durationOf({ state: 'running', started: a.started }, now, null);
+    const t = el('span', d.cls, d.text);
+    if (a.state === 'stalled') t.title = 'Open, but its transcript has not moved in over ten minutes';
+    sub.append(t);
+    wrap.append(sub);
+  }
+  return wrap;
+}
+
 let runsSig = null;
 
 function renderRuns(runs, sessions = []) {
@@ -433,7 +546,11 @@ function renderRuns(runs, sessions = []) {
   // the overstatement this whole change exists to remove.
   $('runs-count').textContent =
     `${pad2(runs.length)} RUNS` +
-    (sessions.length ? ` · ${pad2(sessions.length)} QUIET` : '') +
+    // SILENT, not QUIET. QUIET already means "this run has not written in N
+    // minutes" on a run row (runs-view.js stateText), and the counter was using
+    // the same word for "this session has no run file at all". Two facts, one
+    // word, six inches apart on the same panel.
+    (sessions.length ? ` · ${pad2(sessions.length)} SILENT` : '') +
     (needing ? ` · ${pad2(needing)} NEEDS YOU` : '');
 
   // Rebuild only when something displayed actually changed. This render is
@@ -446,23 +563,23 @@ function renderRuns(runs, sessions = []) {
     // Sessions carry a clock-derived uptime, so the bucket goes in the
     // signature for the same reason unit timers do: without it the line freezes
     // at whatever it first said.
-    ...sessions.map((s) => `${s.pid}${s.tty}${s.where}${sessionText(s, now)}`),
+    //
+    // Every observed field is here too. One missing from this list renders once
+    // and never changes again — the defect recorded above, where a unit timer
+    // sat at "running 5m" for nineteen minutes. `movedAt` is BUCKETED rather
+    // than raw: it moves every few seconds on a working session, and an
+    // unbucketed value would rebuild the row on every parse, destroying the
+    // text selection this guard exists to protect.
+    ...sessions.map((s) => [
+      s.pid, s.tty, s.where, sessionText(s, now), s.status ?? '', s.name ?? '',
+      s.lastTool ?? '', s.branch ?? '', s.agentsCapped ?? 0, s.context ?? '',
+      (s.agents ?? []).map((a) => `${a.id}${a.state}`).join(','),
+      s.movedAt ? Math.floor(Date.parse(s.movedAt) / 30_000) : '',
+    ].join('\x01')),
   ].join('\n');
   if (sig !== runsSig) {
     runsSig = sig;
-    const rows = groupedRows(runs, now);
-    if (sessions.length) {
-      // Below the runs, always. A session with no status is context for the
-      // board, not competition for it.
-      const head = el('div', 'repo-head');
-      head.append(el('span', 'repo-name', 'not reporting'));
-      head.append(el('span', 'rule-fill'));
-      head.append(el('span', 'repo-tally',
-        `${pad2(sessions.length)} ${sessions.length === 1 ? 'SESSION' : 'SESSIONS'}`));
-      rows.push(head);
-      for (const s of sessions) rows.push(sessionRow(s, now));
-    }
-    fill('runs-list', rows, 'NOTHING IS RUNNING');
+    fill('runs-list', groupedRows(runs, sessions, now), 'NOTHING IS RUNNING');
   }
   flashIfChanged($('p-runs'), [runs, sessions]);
 }
@@ -471,15 +588,33 @@ function renderRuns(runs, sessions = []) {
 // needs the operator sorts first. Grouping otherwise buries the urgent row at an
 // unpredictable depth, which is the one thing this panel cannot afford.
 
-function groupedRows(runs, now) {
+/**
+ * Runs and sessions in one list.
+ *
+ * They used to be two sections with three vocabularies for one idea — the header
+ * said NOT REPORTING, its counter said SESSIONS, the row tag said NO STATUS —
+ * and the same visual slot held a machine name on one and a path on the other.
+ * They are the same object: a session. A run file only adds a goal and a unit
+ * plan on top of one.
+ *
+ * Sessions carry a `project`, so they group with the runs in the same repo
+ * rather than being stacked underneath everything.
+ */
+function groupedRows(runs, sessions, now) {
   const expand = expandSet(runs);
   const byRepo = new Map();
-  for (const r of runs) {
-    const key = r.project || '—';
-    if (!byRepo.has(key)) byRepo.set(key, []);
-    byRepo.get(key).push(r);
-  }
-  const worst = (list) => Math.min(...list.map((r) => URGENCY[runState(r)] ?? 9));
+  const put = (key, item) => {
+    const k = key || '—';
+    if (!byRepo.has(k)) byRepo.set(k, []);
+    byRepo.get(k).push(item);
+  };
+  for (const r of runs) put(r.project, r);
+  for (const s of sessions) put(s.project, s);
+
+  // Rank a repo by the worst thing inside it, so the group holding the row that
+  // needs the operator sorts first. Grouping otherwise buries the urgent row at
+  // an unpredictable depth, which is the one thing this panel cannot afford.
+  const worst = (list) => Math.min(...list.map(mergedRank));
   const groups = [...byRepo.entries()].sort(
     (a, b) => worst(a[1]) - worst(b[1]) || a[0].localeCompare(b[0]),
   );
@@ -492,14 +627,20 @@ function groupedRows(runs, now) {
       const head = el('div', 'repo-head');
       head.append(el('span', 'repo-name', repo));
       head.append(el('span', 'rule-fill'));
-      const needing = list.filter((r) => runState(r) === 'needs-input').length;
+      const needing = list.filter((r) => r.runId && runState(r) === 'needs-input').length;
+      const quiet = list.filter((r) => !r.runId).length;
       head.append(el('span', 'repo-tally',
-        `${pad2(list.length)} ${list.length === 1 ? 'RUN' : 'RUNS'}` +
+        `${pad2(list.length)} ${list.length === 1 ? 'ROW' : 'ROWS'}` +
+        (quiet ? ` · ${pad2(quiet)} SILENT` : '') +
         (needing ? ` · ${pad2(needing)} NEEDS YOU` : '')));
       rows.push(head);
     }
-    for (const r of list.sort((a, b) => sortRank(a) - sortRank(b))) {
-      rows.push(runRow(r, now, expand.has(r.runId)));
+    // One comparator over both kinds. Sorting each kind separately and
+    // concatenating would put a merrily running run above a stalled session,
+    // and one of those two may be dead.
+    for (const item of list.sort((a, b) => mergedRank(a) - mergedRank(b)
+      || String(a.runId || a.name || '').localeCompare(String(b.runId || b.name || '')))) {
+      rows.push(item.runId ? runRow(item, now, expand.has(item.runId)) : sessionRow(item, now));
     }
   }
   return rows;

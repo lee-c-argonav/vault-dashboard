@@ -12,24 +12,181 @@
 // palette rather than an inversion.
 
 import { writeFile, mkdir } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { homedir } from 'node:os';
 import { readRunsDetailed, readFinishedRunsDetailed } from '../runs.js';
 import { readSessions } from '../sessions.js';
+import { readTranscripts } from '../transcripts.js';
 import {
   LABEL, runState, stateText, durationOf, unitWindow, expandSet, askOf, quietMs,
-  eta, etaText, elapsedText, humanMs, counts, partitionRuns, linkSessions, sessionText, batchStamped,
+  eta, etaText, elapsedText, humanMs, counts, partitionRuns, linkSessions, batchStamped,
   STALE_MS,
   sessionContext, sortRank, blockedNote, FINISHED_MAX_AGE_MS,
 } from '../public/runs-view.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * The state encoding, read from the same file the desktop links.
+ *
+ * Inlined rather than linked: the CSP is `default-src 'none'` with
+ * `style-src 'unsafe-inline'`, so an inline <style> is permitted and an external
+ * stylesheet is not. Nothing is fetched at runtime; this is a build-time read.
+ *
+ * Wrapped, and it has to be. publish.js imports this module and server.js
+ * imports publish.js, so a bare read that threw would kill the daemon during
+ * module evaluation — before server.js installs its handler, and with no output
+ * naming the cause. A missing file costs the new encoding, never the process.
+ */
+/**
+ * The floor, used only when tokens.css cannot be read.
+ *
+ * Deliberately not a copy of that file: it carries the five marks and the three
+ * label steps and nothing else, because its job is to keep the board legible,
+ * not to keep it identical. Falling back to an empty string publishes a page
+ * where every mark has no background and no ring, every label inherits one
+ * colour from body, and the duration column is a single grey — the exact defect
+ * tokens.css exists to remove, deployed automatically and without a word.
+ */
+const TOKENS_FALLBACK = `
+.run-u-dot,.u .dot,.run-a-dot,.a .dot{background:transparent;box-shadow:inset 0 0 0 1px var(--dim)}
+.run-u.is-running .run-u-dot,.u.running .dot,.run-a-dot.is-running,.run-a.is-running .run-a-dot,.a.running .dot{background:var(--orange);box-shadow:none}
+.run-u.is-done .run-u-dot,.u.done .dot,.run-a-dot.is-done,.run-a.is-done .run-a-dot,.a.done .dot{background:var(--dim);box-shadow:none}
+.run-u.is-blocked .run-u-dot,.u.blocked .dot,.run-a-dot.is-blocked,.run-a.is-blocked .run-a-dot,.a.blocked .dot{background:var(--amber);box-shadow:none}
+.run-u.is-failed .run-u-dot,.u.failed .dot,.run-a-dot.is-failed,.run-a.is-failed .run-a-dot,.a.failed .dot{background:var(--bone);box-shadow:none}
+.run-u-label,.u .ul,.run-a-label,.a .al{color:var(--text-3)}
+.run-u.is-running .run-u-label,.u.running .ul,.run-a.is-running .run-a-label,.a.running .al{color:var(--bone)}
+.run-u.is-done .run-u-label,.u.done .ul,.run-a.is-done .run-a-label,.a.done .al{color:var(--dim)}
+.run-u.is-blocked .run-u-label,.u.blocked .ul,.run-a.is-blocked .run-a-label,.a.blocked .al{color:var(--amber)}
+.dur.is-done{color:var(--dim)}.dur.is-running{color:var(--orange)}.dur.is-bad{color:var(--amber)}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;padding:5px 0 7px;font:10px/1.4 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--text-3)}
+.legend i{display:inline-block;width:6px;height:6px;margin-right:5px}
+.legend .is-todo{background:transparent;box-shadow:inset 0 0 0 1px var(--dim)}
+.legend .is-running{background:var(--orange)}
+.legend .is-done{background:var(--dim)}
+.legend .is-blocked{background:var(--amber)}
+.legend .is-failed{background:var(--bone)}
+`;
+
+let TOKENS = '';
+try {
+  TOKENS = readFileSync(join(HERE, '..', 'public', 'tokens.css'), 'utf8');
+} catch (err) {
+  // Loud. A silent fallback here is a board that looks deployed and is not
+  // saying what it claims to say.
+  process.stderr.write(`[status-page] tokens.css unreadable (${err.message}); `
+    + 'publishing the fallback encoding\n');
+  TOKENS = TOKENS_FALLBACK;
+}
 const VAULT = process.env.VAULT_HUD_VAULT || join(homedir(), 'Obsidian', 'vault');
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/**
+ * The only shape allowed to reach the published page.
+ *
+ * WHY A FUNCTION AND NOT A CONVENTION. Until this existed there was no seam:
+ * `build()` rendered from the same in-memory objects the desktop uses, and what
+ * reached an unauthenticated URL was decided by which fields a hand-written
+ * template literal happened to interpolate. Every field added anywhere upstream
+ * was one keystroke from being published. That was survivable while a session
+ * was a pid and a path; it is not now that a session carries a branch name, a
+ * tool name and a fan-out read from someone's transcripts.
+ *
+ * So the allowlist is explicit and the page cannot render what it never holds.
+ * `boardDigest` hashes the PROJECTION, which is what makes "the volatile set and
+ * the privacy set are the same cut" a property of one function instead of a
+ * claim in prose.
+ *
+ * WHAT IS DELIBERATELY DROPPED, and it is more than the obvious:
+ *   - `where` and `project`. A relative path is still a path, and one live value
+ *     on this machine is a directory named after a confidential project
+ *     codename, which was being published under the previous behaviour.
+ *   - `branch`. Branch names carry codenames and ticket ids.
+ *   - `lastTool`, and every tool name. Cheap to leak, no value on a phone.
+ *   - `name`. Derived from the directory, so it leaks the same thing `where`
+ *     does, one step removed.
+ *   - `tty`, `pid`. Machine-local and useless remotely.
+ *   - Sub-agent labels. The sidecar description is human-written and routinely
+ *     names files, findings and people.
+ *
+ * WHAT SURVIVES is the answer to "does anything need me": state, counts, and
+ * how long since something moved.
+ */
+export function toPublicBoard(board, now) {
+  // Idempotent: a second pass over an already-projected board reads the counts
+  // it produced rather than the raw `agents` array it stripped. Both this and
+  // boardDigest are exported and the digest documents itself as hashing the
+  // projection, which invites exactly that call; without this the second pass
+  // zeroed every count and the digest could never move on session state again.
+  const OUT = new Set(['running', 'stalled', 'open']);
+  const agentCounts = (s) => {
+    if (!Array.isArray(s.agents)) {
+      return {
+        agentsOut: s.agentsOut ?? 0,
+        agentsTotal: s.agentsTotal ?? 0,
+        agentsCapped: s.agentsCapped ?? 0,
+      };
+    }
+    return {
+      agentsOut: s.agents.filter((a) => OUT.has(a.state)).length,
+      agentsTotal: s.agents.length,
+      agentsCapped: s.agentsCapped ?? 0,
+    };
+  };
+  const session = (s) => (s ? {
+    // No pid: the phone cannot focus a terminal, so it is identity with no use.
+    status: s.status ?? '',
+    since: s.since ?? null,
+    // Bucketed, not raw. A field on the page and out of the digest is a field
+    // the page can show wrong forever; a raw silence figure moves every second
+    // and would make every tick a deploy. Five minutes is the resolution the
+    // question "has this stopped" actually needs.
+    // CAPPED, deliberately. Uncapped, this advanced once per five minutes per
+    // session forever, so three idle sessions produced roughly 36 digest changes
+    // an hour from a frozen board and pinned the deploy rate at its ceiling. A
+    // terminal left open overnight was enough. Capped at 2, the value stops
+    // moving once the answer is "silent for a while", which is all the phone
+    // needs to say.
+    silentBucket: s.movedAt
+      ? Math.min(2, Math.floor(Math.max(0, now - Date.parse(s.movedAt)) / (5 * 60_000)))
+      : (s.silentBucket ?? null),
+    ...agentCounts(s),
+  } : null);
+
+  const run = (r) => ({
+    runId: r.runId,
+    project: r.project,
+    goal: r.goal,
+    machine: r.machine,
+    state: r.state,
+    note: r.note,
+    tty: r.tty,
+    started: r.started,
+    updated: r.updated,
+    wrote: r.wrote,
+    units: Array.isArray(r.units) ? r.units : [],
+    needsInput: r.needsInput,
+    blockers: r.blockers,
+    session: session(r.session),
+  });
+
+  return {
+    ...board,
+    active: (board.active ?? []).map(run),
+    finished: (board.finished ?? []).map(run),
+    // Guarded, because `session()` already returns null for a null input and the
+    // spread below dereferenced `s` one line later regardless — so a null entry
+    // threw straight out of the digest.
+    unpublished: (board.unpublished ?? [])
+      .filter(Boolean)
+      .map((s) => ({ ...session(s), context: s.context ?? '' })),
+  };
+}
 
 /**
  * Everything the page is rendered from. One reader, used by `build()` here and
@@ -59,6 +216,15 @@ export async function readBoard(vaultPath, injectedSessions, now = null) {
   // without it, so the phone would have kept saying QUIET after the desktop
   // stopped.
   const linked = linkSessions(active, sessions);
+  // Observed detail, the same as the desktop gets. Without this the phone had
+  // layer 0 only — an uptime and nothing else — so a session with 35 sub-agents
+  // and one with none rendered identically. The projection strips the private
+  // half of this before anything is rendered; what survives is state, counts and
+  // how long since something moved.
+  const observed = now === null ? new Map() : await readTranscripts(sessions, { now });
+  for (const r of linked.runs) {
+    if (r.session) r.session = { ...r.session, ...(observed.get(r.session.pid) ?? {}) };
+  }
   // A session between pieces of work still has something to say.
   //
   // `finished`, not `runs.filter(done)`. The archive was missing from this list,
@@ -72,7 +238,9 @@ export async function readBoard(vaultPath, injectedSessions, now = null) {
   // refuse a run already credited to a different session.
   const context = linked.runs.concat(finished);
   const withContext = linked.unpublished.map((s) => ({
-    ...s, context: now === null ? '' : sessionContext(s, context, now),
+    ...s,
+    context: now === null ? '' : sessionContext(s, context, now),
+    ...(observed.get(s.pid) ?? {}),
   }));
   return {
     active: linked.runs,
@@ -101,7 +269,13 @@ export async function readBoard(vaultPath, injectedSessions, now = null) {
  */
 export const QUIET_BUCKET_MS = 30 * 60_000;
 
-export function boardDigest({ active, finished, unpublished, skipped = 0 }, now = null) {
+export function boardDigest(rawBoard, now = null) {
+  // Hashed over the PROJECTION, never the raw board. That is what makes "the
+  // volatile set and the privacy set are the same cut" one function's property
+  // rather than a promise: a field that cannot be published cannot move the
+  // digest, and a field that can is bucketed by the same code that publishes it.
+  const { active, finished, unpublished, skipped = 0 } =
+    toPublicBoard(rawBoard, now ?? Date.now());
   // How silent a run is, coarsely.
   //
   // boardDigest hashes no clock-derived value, and taken literally that froze
@@ -130,7 +304,16 @@ export function boardDigest({ active, finished, unpublished, skipped = 0 }, now 
     // NO UPDATE on the row, and a claimed session never reaches `unpublished`
     // below, so without this a session's death was invisible to the check and
     // the page would have gone on saying NO UPDATE about a dead run.
-    r.session?.pid ?? null,
+    // Presence and state, not pid: the projection drops the pid, so hashing it
+    // hashed undefined both before and after a session died and the row's
+    // NO UPDATE / QUIET flip fired no deploy.
+    // The counts are hashed because the card RENDERS them. Hashing status and
+    // `since` alone meant five agents running versus five returned produced an
+    // identical digest, so the published fan-out line could stay wrong forever —
+    // the exact failure this digest exists to prevent, and already fixed for the
+    // unpublished half while the run half was left behind.
+    r.session ? [r.session.status ?? '', r.session.since ?? '', r.session.silentBucket,
+      r.session.agentsOut, r.session.agentsTotal, r.session.agentsCapped].join(':') : null,
     r.units.map((u) => [u.id, u.label, u.state, u.started, u.ended,
       u.agents.map((a) => [a.label, a.state, a.started, a.ended])]),
     r.needsInput.map((n) => [n.question, n.since]),
@@ -141,9 +324,20 @@ export function boardDigest({ active, finished, unpublished, skipped = 0 }, now 
     // Rendered in the footer as "N run files unreadable", so a newly corrupt
     // file must be able to reach the page.
     skipped,
-    // `since` is the process start time, which is fixed for the life of a
-    // session, so it is stable. Uptime is derived from it at render time.
-    sessions: unpublished.map((s) => [s.pid, s.tty, s.project, s.where, s.since]),
+    // `since` is the process start time, fixed for the life of a session, so it
+    // is stable and uptime is derived from it at render time.
+    //
+    // The rest is exactly what the projection publishes, and it has to be. This
+    // list previously named pid, tty, project and where — none of which survive
+    // the projection, so every one hashed as undefined and the digest could not
+    // move at all: a session going from working to stalled fired no deploy and
+    // the phone showed it healthy indefinitely. That is the failure this whole
+    // instrument exists to prevent, reintroduced through the one seam nobody
+    // renders. `silentBucket` is already coarse, so it advances at the bucket
+    // and not on the clock.
+    sessions: unpublished.map((s) => [
+      s.since, s.status, s.silentBucket, s.agentsOut, s.agentsTotal, s.agentsCapped, s.context,
+    ]),
   })).digest('hex');
 }
 
@@ -246,35 +440,26 @@ h2{font:600 17px/1.35 var(--sans);margin:0;overflow-wrap:anywhere;
 
 /* Units. Same three columns as the HUD so the two surfaces read alike. */
 .units{margin:14px 0 0;border-top:1px solid var(--rule);padding-top:4px}
-.u{display:grid;grid-template-columns:7px 38px minmax(0,1fr) 54px;gap:8px;
+.u{display:grid;grid-template-columns:7px 38px minmax(0,1fr) 58px;gap:8px;
    align-items:baseline;padding:5px 0}
-.dot{width:6px;height:6px;align-self:start;margin-top:7px;background:var(--rule-hot)}
-.u.done .dot{background:var(--bone)}
-.u.running .dot{background:var(--orange)}
-.u.blocked .dot{background:var(--amber)}
-.u.failed .dot{background:var(--bone);box-shadow:inset 0 0 0 1px var(--orange)}
+/* Geometry only. Colour and shape per state come from tokens.css, appended
+   after this block and shared with the desktop. */
+.dot{width:6px;height:6px;align-self:start;margin-top:7px}
 .uid{font:11px/1.45 var(--mono);letter-spacing:.06em;color:var(--text-3);
      white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ul{font:14px/1.45 var(--sans);color:var(--dim);overflow-wrap:anywhere}
-.u.done .ul,.u.running .ul{color:var(--bone)}
+.ul{font:14px/1.45 var(--sans);overflow-wrap:anywhere}
 .dur{font:11px/1.45 var(--mono);font-variant-numeric:tabular-nums;letter-spacing:.04em;
      text-align:right;white-space:nowrap;color:var(--text-3)}
-.dur.is-done{color:var(--dim)}
-.dur.is-running{color:var(--orange)}
-.dur.is-bad{color:var(--amber)}
+.agents{margin:10px 0 0;padding:3px 0 3px 61px;font:10px/1.4 var(--mono);
+        letter-spacing:.1em;text-transform:uppercase;color:var(--text-3)}
 .more{padding:5px 0 5px 61px;font:10px/1.45 var(--mono);letter-spacing:.1em;
       text-transform:uppercase;color:var(--text-3)}
 
 /* Sub-agents, indented past the label column exactly as on the desktop. */
-.a{display:grid;grid-template-columns:4px minmax(0,1fr) 54px;gap:8px;
+.a{display:grid;grid-template-columns:4px minmax(0,1fr) 58px;gap:8px;
    align-items:baseline;padding:3px 0 3px 61px}
-.a .dot{width:4px;height:4px;align-self:start;margin-top:7px;background:var(--rule-hot)}
-.a.done .dot{background:var(--bone)}
-.a.running .dot{background:var(--orange)}
-.a.blocked .dot{background:var(--amber)}
-.a.failed .dot{background:var(--bone);box-shadow:inset 0 0 0 1px var(--orange)}
-.al{font:13px/1.45 var(--sans);color:var(--text-3);overflow-wrap:anywhere}
-.a.done .al,.a.running .al{color:var(--dim)}
+.a .dot{width:4px;height:4px;align-self:start;margin-top:7px}
+.al{font:13px/1.45 var(--sans);overflow-wrap:anywhere}
 
 .foot{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 12px;margin:13px 0 0;
       padding-top:10px;border-top:1px solid var(--rule);
@@ -307,7 +492,8 @@ footer{margin-top:30px;font:11px/1.5 var(--mono);color:var(--dim);
 .sess{padding:9px 0;border-bottom:1px solid var(--rule)}
 .sess:last-of-type{border-bottom:0}
 .sess-head{display:flex;align-items:baseline;gap:9px}
-.sess .dot{width:5px;height:5px;align-self:center;margin:0;background:var(--dimmer)}
+/* Geometry only; state colour comes from tokens.css, same as the desktop. */
+.sess .dot{width:5px;height:5px;align-self:center;margin:0}
 /* What the session last published. A session between pieces of work is not the
    same thing as one nobody has heard from, and the bare row said the second
    about both. */
@@ -387,6 +573,10 @@ function runCard(r, now, expanded) {
   ${r.note ? `<p class="note">${esc(r.note)}</p>` : ''}
   ${ask ? `<p class="ask${blockedNote(r) ? ' warn' : ''}">${esc(ask)}</p>` : ''}
   ${r.units.length ? `<div class="units">${unitRows(r.units, now)}</div>` : ''}
+  ${r.session?.agentsTotal ? `<p class="agents">${
+    String(r.session.agentsOut).padStart(2, '0')} out · ${
+    String(r.session.agentsTotal - r.session.agentsOut).padStart(2, '0')} back${
+    r.session.agentsCapped ? ` · +${r.session.agentsCapped} more` : ''}</p>` : ''}
   <div class="foot">
     <span><span class="mach">${esc(r.machine)}</span> · ${c.done} of ${c.total} done${elapsed ? ` · ${elapsed}` : ''}</span>
     <span>${e ? esc(etaText(e)) : ''}</span>
@@ -418,15 +608,38 @@ function ranFor(r) {
  * quiet board is indistinguishable from an idle machine. They are not clickable
  * here, because there is no terminal to focus from a phone.
  */
+/**
+ * Sessions on the phone, rendered from the projection and therefore carrying no
+ * location at all.
+ *
+ * This used to print `sessionText`, which is `where || project` plus an uptime —
+ * a relative path, published to an unauthenticated URL, and one live value on
+ * this machine is a directory named after a confidential codename. The phone now
+ * answers the only question it is read for: is anything waiting, and has
+ * anything stopped moving.
+ */
 function sessionSection(sessions, now) {
   if (!sessions.length) return '';
-  const rows = sessions.map((s) =>
-    `<div class="sess"><div class="sess-head"><i class="dot"></i>` +
-    `<span class="sl">${esc(sessionText(s, now))}</span>` +
-    `<span class="stag">${s.context ? 'IDLE' : 'NO STATUS'}</span></div>` +
-    (s.context ? `<div class="sctx">${esc(s.context)}</div>` : '') +
-    `</div>`).join('');
-  return `<p class="hist-head">Not reporting · ${String(sessions.length).padStart(2, '0')}</p>${rows}`;
+  const rows = sessions.map((s, i) => {
+    const t = Date.parse(s.since);
+    const up = Number.isFinite(t) ? humanMs(Math.max(0, now - t)) : '--';
+    const bits = [`session ${String(i + 1).padStart(2, '0')}`, up];
+    if (s.agentsOut) bits.push(`${s.agentsOut} agent${s.agentsOut === 1 ? '' : 's'} out`);
+    else if (s.agentsTotal) bits.push(`${s.agentsTotal} agents done`);
+    // Bucketed at five minutes by the projection, so the phrase is honest about
+    // its own resolution rather than implying a precision it does not have.
+    if (s.silentBucket) bits.push(`silent ${s.silentBucket * 5}m+`);
+    return `<div class="sess is-${esc(s.status || 'unknown')}"><div class="sess-head"><i class="dot"></i>`
+      + `<span class="sl">${esc(bits.join(' · '))}</span>`
+      // The observed status when there is one. Falling back to IDLE rather than
+      // NO STATUS when a session has context is the older rule and still right:
+      // the two say different things, one being a session nobody has heard from
+      // and the other a session between pieces of work.
+      + `<span class="stag">${esc((s.status || (s.context ? 'idle' : 'no status')).toUpperCase())}</span></div>`
+      + (s.context ? `<div class="sctx">${esc(s.context)}</div>` : '')
+      + `</div>`;
+  }).join('');
+  return `<p class="hist-head">Sessions · ${String(sessions.length).padStart(2, '0')}</p>${rows}`;
 }
 
 /** A finished run is one line: what it was, when it ended, how much it did. */
@@ -469,7 +682,11 @@ export async function build(opts = {}) {
   // true and useful statement, and refusing to publish it would replace one
   // silent lie with another.
   // `opts.sessions` lets a test hand sessions in rather than read the machine.
-  const { active, finished, unpublished, skipped } = await readBoard(vault, opts.sessions, now);
+  // Projected before anything is rendered. build() never holds an object
+  // carrying a branch, a tool name, a path or a sub-agent label, so the page
+  // cannot leak one by a template picking up a new field.
+  const { active, finished, unpublished, skipped } =
+    toPublicBoard(await readBoard(vault, opts.sessions, now), now);
 
   const needing = active.filter((r) => runState(r) === 'needs-input').length;
   const expand = expandSet(active);
@@ -503,8 +720,9 @@ export async function build(opts = {}) {
      Content-Security-Policy is default-src 'none' and no script may run; the
      alternative was widening the CSP on a page that serves real vault content
      to an unauthenticated GET, which is not worth a nicer reload.
-     120s, comfortably under the publisher's 5-minute cycle. -->
-<meta http-equiv="refresh" content="120">
+     60s, matching the publisher's 60s check. Stated in the footer too, so the
+     page never claims a cadence it does not have. -->
+<meta http-equiv="refresh" content="60">
 <meta name="color-scheme" content="dark light">
 <meta name="theme-color" content="#08090A" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#F4F2EE" media="(prefers-color-scheme: light)">
@@ -519,15 +737,22 @@ export async function build(opts = {}) {
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Runs">
 <title>Run status</title>
-<style>${CSS}</style>
+<style>${CSS}${TOKENS}</style>
 <p class="k">${needing ? 'Needs you' : 'Active runs'}</p>
 <p class="n${needing ? '' : ' calm'}">${String(needing || active.length).padStart(2, '0')}</p>
+${active.length ? `<div class="legend" role="group" aria-label="Unit state key">
+  <span><i class="is-running"></i>running</span>
+  <span><i class="is-blocked"></i>blocked</span>
+  <span><i class="is-failed"></i>failed</span>
+  <span><i class="is-todo"></i>todo</span>
+  <span><i class="is-done"></i>done</span>
+</div>` : ''}
 ${body}
 ${sessionSection(unpublished, now)}
 ${historySection(finished, now)}
 <footer>
   <a class="rf" href="/" aria-label="Reload this page now">Refresh</a>
-  <span class="age">Built ${new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · reloads every 2 min</span>${skipped
+  <span class="age">Built ${new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · reloads every 60s</span>${skipped
     ? `<span class="age">${skipped} run ${skipped === 1 ? 'file' : 'files'} unreadable</span>`
     : ''}
 </footer>`;

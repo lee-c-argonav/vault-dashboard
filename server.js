@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import parseVault from './parse.js';
+import parseVault, { observeSessions } from './parse.js';
 import { loadShortcuts, publicShortcuts, runShortcut } from './shortcuts.js';
 import { startMetrics, stopMetrics, currentMetrics } from './metrics.js';
 import { focusRunTerminal, focusSessionTerminal, RUN_PREFIX, SESSION_PREFIX } from './run-terminal.js';
@@ -35,6 +35,14 @@ const VAULT = path.resolve(
 const PUBLIC_ROOT = path.resolve(HERE, process.env.VAULT_HUD_PUBLIC ?? './public');
 
 const DEBOUNCE_MS = 150;
+/** Ceiling on how long a burst may postpone the parse. Without it, any event
+ *  stream whose gaps stay under DEBOUNCE_MS defers it forever. */
+const DEBOUNCE_MAX_MS = 1_000;
+/** Where agent sessions write about themselves. Outside the vault, so the
+ *  recursive vault watch cannot see it. Override for tests. */
+const TRANSCRIPT_ROOT = process.env.VAULT_HUD_CLAUDE_HOME
+  ? path.join(process.env.VAULT_HUD_CLAUDE_HOME, 'projects')
+  : path.join(os.homedir(), '.claude', 'projects');
 const KEEPALIVE_MS = 25_000;
 const WATCH_RETRY_MIN_MS = 500;
 const WATCH_RETRY_MAX_MS = 8_000;
@@ -111,6 +119,9 @@ async function refresh() {
   try {
     const state = await parseVault(VAULT);
     lastGood = state;
+    // Bumped on every full parse, so a partial refresh that was mid-await can
+    // tell its inputs are stale and stand down.
+    stateGeneration += 1;
     publish(state);
   } catch (err) {
     process.stderr.write(`[vault-hud] parse failed: ${err?.stack ?? err}\n`);
@@ -358,10 +369,26 @@ const server = createServer((req, res) => {
 
 // ── Watcher ───────────────────────────────────────────────────────────────────
 
-let watcher = null;
 let debounceTimer = null;
-let retryDelay = WATCH_RETRY_MIN_MS;
-let retryTimer = null;
+/** When the current debounce burst began, so a continuous event stream cannot
+ *  postpone the parse forever. See DEBOUNCE_MAX_MS. */
+let debounceStarted = 0;
+let sessionTimer = null;
+/** Incremented by every full parse. See scheduleSessionRefresh. */
+let stateGeneration = 0;
+
+/**
+ * One watcher's mutable state.
+ *
+ * There are two watchers now — the vault and the transcript tree — and they must
+ * fail independently. A single set of `watcher`/`retryDelay`/`retryTimer` meant
+ * an error on either tore down the other, and `scheduleWatcherRestart` returning
+ * early while a retry was pending dropped the second failure entirely.
+ */
+function watcherState(name, root, isRelevant, onEvent) {
+  return { name, root, isRelevant, onEvent, handle: null,
+    retryDelay: WATCH_RETRY_MIN_MS, retryTimer: null };
+}
 
 /** True for .md files that are inside the scanning scope. */
 function relevant(filename) {
@@ -377,54 +404,131 @@ function relevant(filename) {
   return (lower.endsWith('.md') || lower.endsWith('.json')) && !base.startsWith('.');
 }
 
+/**
+ * True for a transcript file. Its own predicate, because `relevant()` above
+ * rejects every one of them: `'x.jsonl'.endsWith('.json')` is false, and the
+ * first loop rejects any path segment beginning with a dot, which `.claude` is.
+ * Filenames arrive relative to the watched root.
+ */
+function relevantTranscript(filename) {
+  if (!filename) return true;
+  const lower = filename.toLowerCase();
+  return lower.endsWith('.jsonl') || lower.endsWith('.meta.json');
+}
+
+/**
+ * Coalesce a burst, but never past DEBOUNCE_MAX_MS.
+ *
+ * The plain version cleared and re-armed on every event, so any stream whose
+ * gaps stay under 150ms postponed the parse indefinitely. A vault of markdown
+ * never produced one; the transcript tree does — measured at 290 entries in one
+ * minute on a fanned-out session, with 40% of gaps under the debounce. The
+ * ceiling makes the delay bounded rather than best-effort.
+ */
 function scheduleRefresh() {
+  const now = Date.now();
+  if (!debounceTimer) debounceStarted = now;
+  else if (now - debounceStarted >= DEBOUNCE_MAX_MS) return;   // already due; let it fire
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
+    debounceTimer = null;
     refresh().catch((err) => process.stderr.write(`[vault-hud] refresh error: ${err}\n`));
   }, DEBOUNCE_MS);
 }
 
-function startWatcher() {
+/**
+ * Refresh only what a transcript event can have changed.
+ *
+ * Re-reads the process table and the session files and republishes the last
+ * good State with new session data. Does NOT re-walk the vault: nothing under
+ * the transcript tree can change a note, a todo or the graph, and routing these
+ * events through the full parse is how a fanned-out session turns into three
+ * vault parses a second.
+ */
+let sessionRefreshInFlight = false;
+
+function scheduleSessionRefresh() {
+  if (sessionTimer) return;
+  sessionTimer = setTimeout(async () => {
+    // Cleared only after the work finishes, together with the in-flight flag.
+    // Clearing it first let two partial refreshes overlap and publish out of
+    // order.
+    if (sessionRefreshInFlight) { sessionTimer = null; return; }
+    sessionRefreshInFlight = true;
+    try {
+      if (!lastGood) return;
+      // The full parse assigns `lastGood` wholesale and runs on its own timer,
+      // so the value read BEFORE this await can be superseded during it.
+      // Capturing a generation lets a stale result be discarded rather than
+      // resurrecting a run the parse just retired, or dropping one it just
+      // added — wrong for up to a full safety interval.
+      const gen = stateGeneration;
+      const finished = lastGood.finishedRuns ?? [];
+      const { runs, sessions } = await observeSessions(
+        lastGood.runs ?? [], finished, Date.now(),
+      );
+      if (gen !== stateGeneration) return;   // a full parse landed; it wins
+      lastGood = { ...lastGood, runs, sessions };
+      publish(lastGood);
+    } catch (err) {
+      process.stderr.write(`[vault-hud] session refresh error: ${err}\n`);
+    } finally {
+      sessionRefreshInFlight = false;
+      sessionTimer = null;
+    }
+  }, DEBOUNCE_MS);
+}
+
+function startWatcher(w) {
   try {
-    watcher = watch(VAULT, { recursive: true });
+    w.handle = watch(w.root, { recursive: true });
   } catch (err) {
-    process.stderr.write(`[vault-hud] watch failed to start: ${err.message}\n`);
-    return scheduleWatcherRestart();
+    process.stderr.write(`[vault-hud] ${w.name} watch failed to start: ${err.message}\n`);
+    return scheduleWatcherRestart(w);
   }
-  retryDelay = WATCH_RETRY_MIN_MS;
-  watcher.on('change', (_event, filename) => {
-    if (relevant(filename)) scheduleRefresh();
+  w.retryDelay = WATCH_RETRY_MIN_MS;
+  w.handle.on('change', (_event, filename) => {
+    if (w.isRelevant(filename)) w.onEvent();
   });
-  watcher.on('error', (err) => {
-    process.stderr.write(`[vault-hud] watcher error: ${err.message}\n`);
-    scheduleWatcherRestart();
+  w.handle.on('error', (err) => {
+    process.stderr.write(`[vault-hud] ${w.name} watcher error: ${err.message}\n`);
+    scheduleWatcherRestart(w);
   });
-  watcher.on('close', () => {
-    if (!shuttingDown) scheduleWatcherRestart();
+  w.handle.on('close', () => {
+    if (!shuttingDown) scheduleWatcherRestart(w);
   });
 }
 
-/** Tear the watcher down and re-establish it, backing off on repeated failure. */
-function scheduleWatcherRestart() {
-  if (shuttingDown || retryTimer) return;
-  if (watcher) {
-    watcher.removeAllListeners();
+/** Tear one watcher down and re-establish it, backing off on repeated failure.
+ *  Per watcher, so a failing transcript tree cannot take the vault with it. */
+function scheduleWatcherRestart(w) {
+  if (shuttingDown || w.retryTimer) return;
+  if (w.handle) {
+    w.handle.removeAllListeners();
     try {
-      watcher.close();
+      w.handle.close();
     } catch {
       /* already dead */
     }
-    watcher = null;
+    w.handle = null;
   }
-  process.stderr.write(`[vault-hud] restarting watcher in ${retryDelay}ms\n`);
-  retryTimer = setTimeout(() => {
-    retryTimer = null;
-    startWatcher();
+  process.stderr.write(`[vault-hud] restarting ${w.name} watcher in ${w.retryDelay}ms\n`);
+  w.retryTimer = setTimeout(() => {
+    w.retryTimer = null;
+    startWatcher(w);
     // Catch up on anything missed while the watcher was down.
-    scheduleRefresh();
-  }, retryDelay);
-  retryDelay = Math.min(retryDelay * 2, WATCH_RETRY_MAX_MS);
+    w.onEvent();
+  }, w.retryDelay);
+  w.retryDelay = Math.min(w.retryDelay * 2, WATCH_RETRY_MAX_MS);
 }
+
+const WATCHERS = [
+  watcherState('vault', VAULT, relevant, scheduleRefresh),
+  // The transcript tree lives outside the vault, so the recursive watch above
+  // never sees it and observed session detail only moved on the 10s safety
+  // refresh. Its own predicate and its own retry state; see both above.
+  watcherState('transcripts', TRANSCRIPT_ROOT, relevantTranscript, scheduleSessionRefresh),
+];
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
@@ -437,8 +541,13 @@ function shutdown(signal) {
   clearInterval(rollover);
   clearInterval(safetyRefresh);
   clearTimeout(debounceTimer);
-  clearTimeout(retryTimer);
-  watcher?.close();
+  clearTimeout(sessionTimer);
+  // Every watcher, not one. Closing a single handle left the other running and
+  // its retry timer armed, so shutdown did not shut down.
+  for (const w of WATCHERS) {
+    clearTimeout(w.retryTimer);
+    w.handle?.close();
+  }
   stopMetrics();
   stopPublishing();
   for (const res of clients) res.end();
@@ -503,12 +612,18 @@ rollover.unref();
 // through the debounced scheduler so it coalesces with watcher bursts, and a parse
 // that finds nothing changed republishes identical State cheaply.
 const SAFETY_REFRESH_MS = 10_000;
-const safetyRefresh = setInterval(scheduleRefresh, SAFETY_REFRESH_MS);
+// Straight to refresh(), NOT through scheduleRefresh. Routed through the
+// debounce, the safety net cleared and re-armed the very timer it exists to
+// backstop, so a sustained event stream postponed the floor along with
+// everything else. A floor that can be postponed is not a floor.
+const safetyRefresh = setInterval(() => {
+  refresh().catch((err) => process.stderr.write(`[vault-hud] refresh error: ${err}\n`));
+}, SAFETY_REFRESH_MS);
 safetyRefresh.unref();
 
 const parseMs = await refresh();
 const shortcutCount = await loadShortcuts();
-startWatcher();
+for (const w of WATCHERS) startWatcher(w);
 
 server.listen(PORT, HOST, () => {
   // Publishing starts only once the port is genuinely held.
