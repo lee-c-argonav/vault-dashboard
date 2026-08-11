@@ -251,18 +251,18 @@ function heroFor(state) {
     };
   }
 
-  const working = live.filter((s) => s.status === 'working');
+  const working = live.filter((s) => s.status === 'running');
   if (working.length) {
     const contexts = new Set(working.map((s) => s.project || '—')).size;
     return {
-      label: 'WORKING',
+      label: 'RUNNING',
       n: working.length,
       calm: true,
       sub: `${pad2(contexts)} ${contexts === 1 ? 'CONTEXT' : 'CONTEXTS'} · NOTHING WAITING ON YOU`,
     };
   }
 
-  return { label: 'IDLE', n: live.length, calm: true, sub: 'NO AGENT IS WORKING' };
+  return { label: 'IDLE', n: live.length, calm: true, sub: 'NO AGENT IS RUNNING' };
 }
 
 function renderHero(state) {

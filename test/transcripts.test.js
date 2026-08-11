@@ -109,7 +109,7 @@ test('joins a session to its transcript through the pid file', async () => {
   assert.equal(d.name, 'proj-aa');
   assert.equal(d.branch, 'main');
   assert.equal(d.lastTool, 'Edit');
-  assert.equal(d.status, 'working');
+  assert.equal(d.status, 'running');
 });
 
 test('refuses the join when the pid file names a different cwd', async () => {
@@ -312,7 +312,7 @@ test('the sub-agent cap reports the excess rather than hiding it', async () => {
 test('a missing transcript keeps the process facts', async () => {
   writePid();
   const d = (await read()).get(4242);
-  assert.equal(d.status, 'working');
+  assert.equal(d.status, 'running');
   assert.equal(d.name, 'proj-aa');
   assert.deepEqual(d.agents, []);
 });

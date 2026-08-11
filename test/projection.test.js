@@ -25,7 +25,7 @@ function hostileBoard() {
     project: 'projectcodename',
     where: 'Desktop/repos/projectcodename',
     name: 'projectcodename-4e',
-    status: 'working',
+    status: 'running',
     lastTool: 'mcp__playwright__browser_close',
     branch: 'feature/SECRET-1234-rename',
     movedAt: '2026-08-11T17:40:00Z',
@@ -68,7 +68,7 @@ test('the projection drops every confidential field', () => {
 test('the projection keeps what the phone is actually read for', () => {
   const out = toPublicBoard(hostileBoard(), NOW);
   const s = out.unpublished[0];
-  assert.equal(s.status, 'working');
+  assert.equal(s.status, 'running');
   assert.equal(s.agentsOut, 1, 'one agent still running');
   assert.equal(s.agentsTotal, 2);
   assert.equal(s.agentsCapped, 3, 'a hidden excess must stay visible as a number');
@@ -76,7 +76,7 @@ test('the projection keeps what the phone is actually read for', () => {
   // sessions alone kept the digest moving and pinned the deploy rate.
   assert.equal(s.silentBucket, 2, '20 minutes silent, bucketed at five and capped');
   assert.equal(out.active[0].goal, 'g', 'the goal is declared and is meant to publish');
-  assert.equal(out.active[0].session.status, 'working');
+  assert.equal(out.active[0].session.status, 'running');
 });
 
 test('a run row keeps no session identity either', () => {

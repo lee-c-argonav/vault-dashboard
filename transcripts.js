@@ -495,7 +495,7 @@ async function readOne(session, now, touched) {
     // The transcript is missing or the slug guess was wrong. The name and the
     // process's own busy flag are still real, so the row keeps them.
     return {
-      status: pid.busy ? 'working' : 'idle',
+      status: pid.busy ? 'running' : 'idle',
       title: '', lastTool: '', movedAt: null, branch: '', name: pid.name,
       agents: [], agentsCapped: 0,
     };
@@ -517,10 +517,17 @@ async function readOne(session, now, touched) {
 
   // Three states, each from evidence that exists. `stalled` is the one worth
   // catching: a process claiming to work while writing nothing.
+  //
+  // `running`, NOT `working`. They meant the same thing and the board carried
+  // both: a run, a unit and a sub-agent were all `running` while a session alone
+  // was `working`, so the panel showed two words for one idea and asked the
+  // reader to wonder what separated them. Nothing did. `running` won because it
+  // is the word the run-file schema already binds across every repo, so the one
+  // that changed is the one with no contract behind it.
   const silent = now - st.mtimeMs;
   const status = !pid.busy ? 'idle'
     : silent > SESSION_STALE_MS ? 'stalled'
-      : 'working';
+      : 'running';
 
   const { agents, capped } = await readAgents(join(dir, pid.sessionId, 'subagents'), now, touched);
 

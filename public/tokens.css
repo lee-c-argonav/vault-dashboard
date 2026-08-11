@@ -223,8 +223,8 @@
    Only `working` pulses. `stalled` is amber and deliberately STILL, because it
    means a process claiming to work while writing nothing, and animating it would
    assert the very liveness the state exists to deny. */
-.sess.is-working .sess-dot,
-.sess.is-working .dot {
+.sess.is-running .sess-dot,
+.sess.is-running .dot {
   border-radius: 50%;
   background: var(--st-running);
   box-shadow: none;
@@ -241,8 +241,8 @@
    the LIVE lamp and the panel transition and never saw this file. Held still,
    the halo still reads as emission, so the state is never left to hue alone. */
 @media (prefers-reduced-motion: reduce) {
-  .sess.is-working .sess-dot,
-  .sess.is-working .dot {
+  .sess.is-running .sess-dot,
+  .sess.is-running .dot {
     animation: none;
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--st-running) 28%, transparent);
   }

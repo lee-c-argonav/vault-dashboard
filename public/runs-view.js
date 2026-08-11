@@ -374,7 +374,7 @@ export function attentionModel(state) {
       try { return runState(r) === 'blocked'; } catch { return false; }
     }).length,
     stalled: busy.filter((s) => s.status === 'stalled').length,
-    sessions: live.filter((s) => s?.status === 'working').length,
+    sessions: live.filter((s) => s?.status === 'running').length,
     contexts: new Set(withProject.map((s) => s.project)).size,
     agentsOut: live.reduce((n, s) => n + agentsOutOf(s), 0),
   };
@@ -807,7 +807,7 @@ export const URGENCY = { 'needs-input': 0, blocked: 1, running: 2, paused: 3, do
  *   3   stalled session      7   idle session
  *   4/5 running run          8/9 done run
  */
-const SESSION_RANK = { stalled: 3, working: 5, idle: 7, unknown: 9 };
+const SESSION_RANK = { stalled: 3, running: 5, idle: 7, unknown: 9 };
 
 export function mergedRank(item) {
   if (item.runId) return (URGENCY[runState(item)] ?? 9) * 2 + (blockedNote(item) ? 0 : 1);

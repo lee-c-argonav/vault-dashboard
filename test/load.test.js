@@ -15,7 +15,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { attentionModel, attentionCaption, DEMAND_KINDS } from '../public/runs-view.js';
 
-const session = (over = {}) => ({ status: 'working', project: 'p', agents: [], ...over });
+const session = (over = {}) => ({ status: 'running', project: 'p', agents: [], ...over });
 const run = (over = {}) => ({
   runId: 'r', project: 'p', goal: 'g', state: 'running', units: [],
   needsInput: [], blockers: [], session: null, ...over,
@@ -111,7 +111,7 @@ test('agents running is the raw count, in either shape the surfaces hold', () =>
   // private) and keeps counts. The model must read that shape too, or the
   // published census would zero every fan-out.
   const phone = attentionModel({
-    runs: [], sessions: [{ status: 'working', agentsOut: 5, agentsTotal: 9 }],
+    runs: [], sessions: [{ status: 'running', agentsOut: 5, agentsTotal: 9 }],
   });
   assert.equal(phone.flight.agentsOut, 5);
 });
@@ -139,7 +139,7 @@ test('contexts are stated only where every busy session names its project', () =
   assert.equal(desktop.flight.contexts, 1, 'two sessions in one repo are one context');
   assert.match(attentionCaption(desktop), /1 CONTEXT\b/);
   const phone = attentionModel({
-    runs: [], sessions: [{ status: 'working', agentsOut: 0, agentsTotal: 0 }],
+    runs: [], sessions: [{ status: 'running', agentsOut: 0, agentsTotal: 0 }],
   });
   assert.equal(phone.flight.contextsExact, false);
   assert.doesNotMatch(attentionCaption(phone), /CONTEXT/);
