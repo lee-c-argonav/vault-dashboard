@@ -19,7 +19,11 @@
 
   --head-h: 74px;
   --vit-h: 27px;
-  --band-h: 118px;
+  /* Sized to hold the focus line, the census and up to LOAD_CTX_MAX context
+     rows. It was 118px, sized before the breakdown existed, and adding rows to a
+     fixed-height panel overlapped the focus text — visible on the board, which
+     is where it should never have got to. */
+  --band-h: 176px;
   --foot-h: 30px;
 }
 
@@ -390,6 +394,9 @@ body {
   flex-direction: column;
   padding: 9px 16px 0;
   overflow: hidden;
+  /* Without this a flex item refuses to shrink below its content and the
+     children spill over the panel instead of the last one being clipped. */
+  min-height: 0;
 }
 
 .focus-eyebrow {
@@ -425,7 +432,7 @@ body {
    nothing needed anyone (measured 2026-08-11), because it summed healthy work
    into the fill. Marks are countable at a glance, which segment widths scaled
    by weights never were. The model is attentionModel in runs-view.js. */
-.load { display: flex; align-items: center; gap: 10px; margin-top: auto; padding-bottom: 10px; }
+.load { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex: 0 0 auto; }
 .load-k { font: 9px/1 var(--mono); letter-spacing: .16em; color: var(--dim); flex: 0 0 auto; }
 
 .load-n {
@@ -472,6 +479,49 @@ body {
 /* The census in words, demand first in severity order. This is the line that
    says which kind to go and look at; the hero one panel over names the single
    worst item. */
+/* Where the load is. The panel carried one aggregate line and a lot of empty
+   space; this is the list that line summarised. */
+.load-ctx {
+  margin: 8px 0 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  /* `1 1 0` and min-height:0 — this is the child that gives way when the panel
+     is short, because the focus line and the census are the things you must
+     always be able to read. */
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.lc {
+  display: grid;
+  grid-template-columns: minmax(0, 110px) auto minmax(0, 1fr) 64px;
+  align-items: center;
+  gap: 10px;
+  font: 10px/1.4 var(--mono);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.lc-name {
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A context with something stopped in it reads brighter than one merely busy. */
+.lc.has-demand .lc-name { color: var(--bone); }
+.lc-marks { display: inline-flex; gap: 2px; align-items: center; }
+.lc-marks .mk { display: block; width: 5px; height: 5px; border-radius: 50%; }
+.lc-marks .mk.is-hot { background: var(--orange); }
+.lc-marks .mk.is-warn { background: var(--amber); }
+.lc-marks .mk.is-live { background: var(--orange-dim); }
+.lc-n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Scaled to the busiest context, not to a ceiling nobody measured. */
+.lc-bar { height: 3px; background: var(--rule); overflow: hidden; }
+.lc-bar i { display: block; height: 100%; background: var(--orange-dim); }
+.lc.has-demand .lc-bar i { background: var(--orange); }
+
 .load-cap {
   flex: 1 1 auto;
   min-width: 0;

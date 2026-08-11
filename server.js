@@ -36,6 +36,9 @@ const VAULT = path.resolve(
 const PUBLIC_ROOT = path.resolve(HERE, process.env.VAULT_HUD_PUBLIC ?? './public');
 
 const DEBOUNCE_MS = 150;
+/** How much unread SSE a client may accumulate before it is hung up on. Four
+ *  State frames at their observed ~150KB; past that it is not reading. */
+const SSE_MAX_BUFFERED = 600 * 1024;
 /** Ceiling on how long a burst may postpone the parse. Without it, any event
  *  stream whose gaps stay under DEBOUNCE_MS defers it forever. */
 const DEBOUNCE_MAX_MS = 1_000;
@@ -157,7 +160,21 @@ const clients = new Set();
 
 function broadcast(json) {
   const frame = `data: ${json}\n\n`;
-  for (const res of clients) res.write(frame);
+  for (const res of clients) {
+    // A client that stopped reading without closing accumulates frames in this
+    // process's memory — ~150KB every parse, forever, on a daemon meant to run
+    // for weeks. A laptop that slept with the window open is the ordinary way
+    // to produce one. Past the cap it is dropped rather than fed: the page
+    // reconnects on its own (app.js resubscribes when the stream closes) and
+    // gets a whole fresh State, so nothing is lost by hanging up on it.
+    if (res.writableLength > SSE_MAX_BUFFERED) {
+      process.stderr.write('[vault-hud] SSE client not reading; dropping it\n');
+      clients.delete(res);
+      res.destroy();
+      continue;
+    }
+    res.write(frame);
+  }
 }
 
 function openStream(req, res) {

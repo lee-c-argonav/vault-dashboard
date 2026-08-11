@@ -6,7 +6,7 @@
 // Both import it so the two surfaces cannot disagree about whether a run is
 // waiting on you. Liveness lives here, not in State: State is diffed by
 // stringify below, so a clock-derived field would look changed on every push.
-import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText, sessionActivity, mergedRank, attentionModel, attentionCaption, agentEta }
+import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText, sessionActivity, mergedRank, attentionModel, attentionCaption, agentEta, contextBreakdown }
   from './runs-view.js';
 
 const STATE_SOURCES = ['/api/state'];
@@ -194,12 +194,59 @@ function renderFocus(state) {
   }
   strip.replaceChildren(...kids);
   $('load-cap').textContent = attentionCaption(att) || 'nothing running';
+
+  // The census, broken out by context. The caption above is the aggregate and
+  // cannot be acted on — it says three contexts and not which three. This fills
+  // the space the panel already had with the answer to "where is it".
+  // Capped. The panel is a fixed height in the grid, so an uncapped list is a
+  // list that overlaps the focus line the moment a fourth repo appears.
+  const LOAD_CTX_MAX = 4;
+  const all = contextBreakdown(state);
+  const ctx = all.slice(0, LOAD_CTX_MAX);
+  const most = Math.max(1, ...ctx.map((c) => c.sessions + c.agents));
+  $('load-ctx').replaceChildren(...ctx.map((c) => {
+    const line = el('div', `lc${c.demand ? ' has-demand' : ''}`);
+    line.append(el('span', 'lc-name', c.project));
+
+    // One mark per thing, demand first and hot. Countable, where a proportional
+    // bar is not: a wide segment might be three sessions or one question.
+    const marks = el('span', 'lc-marks');
+    for (let i = 0; i < c.needsYou; i++) marks.append(el('i', 'mk is-hot'));
+    for (let i = 0; i < c.blocked + c.stalled; i++) marks.append(el('i', 'mk is-warn'));
+    for (let i = 0; i < c.sessions; i++) marks.append(el('i', 'mk is-live'));
+    line.append(marks);
+
+    const bits = [];
+    if (c.sessions) bits.push(`${c.sessions} SESSION${c.sessions === 1 ? '' : 'S'}`);
+    if (c.agents) bits.push(`${c.agents} AGENT${c.agents === 1 ? '' : 'S'}`);
+    if (c.needsYou) bits.push(`${c.needsYou} NEEDS YOU`);
+    if (c.blocked) bits.push(`${c.blocked} BLOCKED`);
+    if (c.stalled) bits.push(`${c.stalled} STALLED`);
+    line.append(el('span', 'lc-n', bits.join(' · ')));
+
+    // A share bar, scaled to the busiest context rather than to an invented
+    // ceiling — the same reason the census strip has no track.
+    const bar = el('span', 'lc-bar');
+    const fill = el('i');
+    fill.style.width = `${(100 * (c.sessions + c.agents)) / most}%`;
+    bar.append(fill);
+    line.append(bar);
+    return line;
+  }));
+  if (all.length > ctx.length) {
+    const more = el('div', 'lc lc-more');
+    more.append(el('span', 'lc-name', `+${all.length - ctx.length} MORE`));
+    $('load-ctx').append(more);
+  }
   // Everything this panel renders derives from these counts, so the flash
   // signature is exactly them: number, marks and caption cannot change without
   // moving one.
   flashIfChanged($('p-focus'), [state.focus,
     att.demand.map((t) => `${t.key}${t.count}`).join(','),
-    f.sessions, f.contexts, f.agentsOut]);
+    f.sessions, f.contexts, f.agentsOut,
+    // The breakdown is clock-free, but its counts are not in any term above:
+    // work moving between contexts changes this panel and nothing else.
+    ctx.map((c) => `${c.project}${c.sessions}${c.agents}${c.demand}`).join(',')]);
 }
 
 // ── hero: the one number that says what is wrong ──────────────────────────────

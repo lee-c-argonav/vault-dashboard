@@ -237,7 +237,10 @@ export function toPublicBoard(board, now) {
   });
 
   return {
-    ...board,
+    // EXPLICIT, not `...board`. A spread makes the allowlist partial: any field
+    // readBoard grows tomorrow rides to the page unprojected, which is the one
+    // way this boundary fails silently. Four fields is the whole board.
+    skipped: board.skipped ?? 0,
     active: (board.active ?? []).map(run),
     finished: (board.finished ?? []).map(run),
     // Guarded, because `session()` already returns null for a null input and the
@@ -359,7 +362,9 @@ export function boardDigest(rawBoard, now = null) {
   };
   // Field order fixed here rather than inherited from object key order, so a
   // reordered literal upstream cannot silently invalidate every digest.
-  const run = (r) => [r.runId, r.project, r.goal, r.machine, r.state, r.note, r.tty,
+  // No r.tty: the projection drops it, so hashing it hashed undefined on every
+  // board. The same hash-a-projected-away-field defect fixed for sessions below.
+  const run = (r) => [r.runId, r.project, r.goal, r.machine, r.state, r.note,
     r.started, r.updated,
     // Whether a session is still writing this run. It decides QUIET versus
     // NO UPDATE on the row, and a claimed session never reaches `unpublished`

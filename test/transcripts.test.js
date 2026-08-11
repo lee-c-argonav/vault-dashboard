@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   readTranscripts, resetTranscripts, SUBAGENT_CAP, AGENT_STALE_MS, SESSION_STALE_MS,
-  AGENT_RECENT_MS,
+  AGENT_RECENT_MS, AGENT_ABANDONED_MS,
 } from '../transcripts.js';
 
 const ROOT = mkdtempSync(join(tmpdir(), 'vh-transcripts-'));
@@ -88,10 +88,38 @@ function writeAgent(id, { meta = {}, body = null } = {}) {
       + assistant([{ type: 'text', text: 'done' }]));
 }
 
+/** An agent a workflow dispatched: same shape, one directory down. */
+function writeWorkflowMeta(wf, fields) {
+  const dir = join(PROJ_DIR, SLUG, SID, 'workflows');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${wf}.json`), JSON.stringify({ runId: wf, ...fields }));
+}
+
+/** The script a workflow persists at launch: `<name>-<wf-id>.js`. */
+function writeWorkflowScript(name, wf) {
+  const dir = join(PROJ_DIR, SLUG, SID, 'workflows', 'scripts');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${name}-${wf}.js`), 'export const meta = {};');
+}
+
+function writeWorkflowAgent(wf, id, over = {}, body = null) {
+  const dir = join(PROJ_DIR, SLUG, SID, 'subagents', 'workflows', wf);
+  mkdirSync(dir, { recursive: true });
+  // NO `description`, matching every real workflow agent on this machine: their
+  // sidecar carries only `agentType: "workflow-subagent"` and `spawnDepth`. A
+  // fixture that invents one tests a path production never takes.
+  writeFileSync(join(dir, `agent-${id}.meta.json`), JSON.stringify({
+    agentType: 'workflow-subagent', spawnDepth: 1, ...over,
+  }));
+  writeFileSync(join(dir, `agent-${id}.jsonl`),
+    body ?? (entry({ type: 'user', timestamp: '2026-08-11T10:00:30Z', message: { role: 'user', content: 'x' } })
+      + assistant([{ type: 'text', text: 'done' }])));
+}
+
 let now = START + 1_000;
 beforeEach(() => {
   rmSync(PID_DIR, { recursive: true, force: true });
-  rmSync(PROJ_DIR, { recursive: true, force: true });
+  rmSync(PROJ_DIR, { recursive: true, force: true });   // includes workflows/ and scripts/
   resetTranscripts();
   now += 10_000;              // defeat the sweep cache between cases
 });
@@ -287,6 +315,82 @@ test('an open sub-agent that stopped writing is stalled', async () => {
   resetTranscripts();
   const d = (await readTranscripts([session()], { now: later })).get(4242);
   assert.equal(d.agents[0].state, 'stalled');
+});
+
+// A workflow writes into subagents/workflows/<wf-id>/, not into subagents/.
+// Scanning only the top level reported "44 SUB-AGENTS ALL 44 RETURNED" for a
+// session whose own terminal read "waiting for 2 dynamic workflows to finish" —
+// 134 agent files one directory down, unread. Found by comparing the board
+// against the terminal beside it.
+test('agents a workflow dispatched are found too', async () => {
+  writePid();
+  writeTranscript(assistant([{ type: 'text', text: 'x' }]));
+  writeAgent('direct');
+  writeWorkflowAgent('wf_abc123', 'w1');
+  writeWorkflowAgent('wf_abc123', 'w2');
+  writeWorkflowAgent('wf_def456', 'w3');
+
+  const d = (await read()).get(4242);
+  assert.equal(d.agents.length, 4, 'workflow agents were not found');
+  const wf = d.agents.filter((a) => a.workflow);
+  assert.equal(wf.length, 3);
+  assert.deepEqual([...new Set(wf.map((a) => a.workflow))].sort(), ['wf_abc123', 'wf_def456']);
+  assert.equal(d.agents.find((a) => a.label === 'task direct').workflow, '',
+    'a directly dispatched agent was credited to a workflow');
+});
+
+// `stalled` is a call to action. A workflow agent whose run ended leaves a
+// transcript stopped mid-tool-call forever, and unbounded that produced 38
+// stalled agents on a session with two running, median idle 72 minutes.
+test('an agent abandoned long ago is history, not a stall', async () => {
+  writePid();
+  writeTranscript(assistant([{ type: 'text', text: 'x' }]));
+  writeAgent('hung', { body: assistant([{ type: 'tool_use', id: 'q', name: 'Bash' }]) });
+
+  const inWindow = Date.now() + AGENT_STALE_MS + 60_000;
+  resetTranscripts();
+  assert.equal((await readTranscripts([session()], { now: inWindow })).get(4242).agents[0].state,
+    'stalled', 'a recently stopped agent should still be actionable');
+
+  const past = Date.now() + AGENT_ABANDONED_MS + 60_000;
+  resetTranscripts();
+  assert.equal((await readTranscripts([session()], { now: past })).get(4242).agents[0].state,
+    'done', 'an agent idle past the horizon was still demanding attention');
+});
+
+// A workflow agent's own meta.json carries no description — only
+// `agentType: "workflow-subagent"` — so 64 rows all read that literal string.
+// The name lives on the workflow, in two places depending on whether it has
+// finished, and the RUNNING case is the one worth naming.
+test('a finished workflow names its agents and settles them', async () => {
+  writePid();
+  writeTranscript(assistant([{ type: 'text', text: 'x' }]));
+  // Stopped mid-tool-call, which is how a workflow agent's transcript ends.
+  writeWorkflowAgent('wf_done1', 'w1', {}, assistant([{ type: 'tool_use', id: 'q', name: 'Bash' }]));
+  writeWorkflowMeta('wf_done1', { workflowName: 'upload-truncation-fixes', status: 'completed' });
+
+  const d = (await read()).get(4242);
+  assert.equal(d.agents[0].label, 'upload-truncation-fixes');
+  assert.equal(d.agents[0].state, 'done',
+    'a completed workflow left its agent looking alive');
+});
+
+test('a running workflow is named from its script, which exists from launch', async () => {
+  writePid();
+  writeTranscript(assistant([{ type: 'text', text: 'x' }]));
+  writeWorkflowAgent('wf_live1', 'w1');
+  // No sidecar: that file is written on completion, so its absence IS the
+  // evidence the workflow is still going.
+  writeWorkflowScript('audio-route-and-oss', 'wf_live1');
+
+  // Real clock: the fixture's mtime is real, and this asserts on liveness, which
+  // recency decides. The shared `now` drifts ten seconds per test.
+  resetTranscripts();
+  const d = (await readTranscripts([session()], { now: Date.now() })).get(4242);
+  assert.equal(d.agents[0].label, 'audio-route-and-oss',
+    'a running workflow was left with the generic agentType');
+  assert.notEqual(d.agents[0].state, 'done',
+    'an unfinished workflow left its agent looking finished');
 });
 
 test('nested sub-agents keep their depth and parent', async () => {

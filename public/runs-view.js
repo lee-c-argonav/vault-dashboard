@@ -420,6 +420,56 @@ export function attentionCaption(m) {
   return parts.join(' · ');
 }
 
+/**
+ * The census broken out by context, which is where the load actually is.
+ *
+ * The caption said "3 SESSIONS · 3 CONTEXTS · 2 AGENTS RUNNING" — true, and it
+ * does not say WHICH three, so it cannot be acted on. A context is a repo, and
+ * "things I am working on at the same time" is exactly the quantity the operator
+ * asked this instrument to measure. Naming them turns one aggregate into the
+ * list you scan.
+ *
+ * Ordered by demand first, then by weight of work, so the row that wants you is
+ * the row at the top rather than the row that happens to sort first.
+ */
+export function contextBreakdown(state) {
+  const runs = state.runs ?? [];
+  const sessions = state.sessions ?? [];
+  const live = [...sessions, ...runs.map((r) => r?.session).filter(Boolean)];
+  const by = new Map();
+  const row = (key) => {
+    const k = key || '—';
+    if (!by.has(k)) {
+      by.set(k, { project: k, sessions: 0, agents: 0, needsYou: 0, blocked: 0, stalled: 0 });
+    }
+    return by.get(k);
+  };
+
+  for (const s of live) {
+    // Only what is alive. An idle session is not load; it is a terminal waiting
+    // for you, and it is already counted by its own row on the board.
+    if (!s.status || s.status === 'idle') continue;
+    const r = row(s.project);
+    r.sessions += 1;
+    r.agents += agentsOutOf(s);
+    if (s.status === 'stalled') r.stalled += 1;
+  }
+  for (const run of runs) {
+    const r = row(run?.project);
+    r.needsYou += run?.needsInput?.length ?? 0;
+    try {
+      if (runState(run) === 'blocked') r.blocked += 1;
+    } catch { /* a half-shaped run costs this term, not the panel */ }
+  }
+
+  return [...by.values()]
+    .filter((r) => r.sessions || r.agents || r.needsYou || r.blocked)
+    .map((r) => ({ ...r, demand: r.needsYou + r.blocked + r.stalled }))
+    .sort((a, b) => b.demand - a.demand
+      || (b.sessions + b.agents) - (a.sessions + a.agents)
+      || a.project.localeCompare(b.project));
+}
+
 /** How long a session has been up, for the one line it gets. */
 export function sessionText(s, now) {
   const t = Date.parse(s.since);
@@ -858,7 +908,6 @@ export function unitWindow(units) {
     pivot = lastDone === -1 ? 0 : lastDone;
   }
   let start = Math.max(0, Math.min(pivot - Math.floor(UNIT_WINDOW / 2), units.length - UNIT_WINDOW));
-  start = Math.max(0, start);
   const end = Math.min(units.length, start + UNIT_WINDOW);
   const tailStart = Math.max(end, units.length - UNIT_TAIL);
   return {

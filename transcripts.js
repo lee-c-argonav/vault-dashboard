@@ -70,6 +70,22 @@ export const AGENT_STALE_MS = 10 * 60_000;
  *  a working agent, and far under AGENT_STALE_MS. */
 export const AGENT_RECENT_MS = 60_000;
 
+/**
+ * Past this, an agent that never closed cleanly is HISTORY, not a stall.
+ *
+ * `stalled` is a call to action — something claims to be working and is not, go
+ * look. That is only true inside a window. A workflow agent whose run ended
+ * leaves a transcript stopped mid-tool-call forever, and with an unbounded tail
+ * the board reported 38 stalled agents on a session with two actually running,
+ * median idle 72 minutes. Thirty-eight demands nobody can act on is worse than
+ * none, because it teaches the operator to ignore the count.
+ *
+ * Thirty minutes: three times the stall threshold, so a genuinely stuck agent
+ * has a wide window to be caught in, and long past the point where anyone would
+ * still be waiting on it.
+ */
+export const AGENT_ABANDONED_MS = 30 * 60_000;
+
 /** A read that has not returned by now is treated as a failed read. Nothing in
  *  this module may block the parse; a symlink loop or a stalled mount would. */
 const READ_TIMEOUT_MS = 2_000;
@@ -206,7 +222,12 @@ async function cached(path, produce, touched) {
   const hit = fileCache.get(path);
   if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.value;
   const value = await guard(() => produce(st), null);
-  fileCache.set(path, { mtimeMs: st.mtimeMs, size: st.size, value });
+  // A FAILURE IS NOT CACHED. The key is mtime+size, and a meta.json is written
+  // once and never rewritten, so one transient failure — EMFILE during a
+  // fan-out burst, a guard timeout — would pin null for the rest of that
+  // session's life and blank the agent's label and type permanently. Retrying
+  // costs one read on the next sweep and only while the failure persists.
+  if (value !== null) fileCache.set(path, { mtimeMs: st.mtimeMs, size: st.size, value });
   return value;
 }
 
@@ -390,7 +411,11 @@ function agentState(entries, movedAt, now) {
   // agent has not answered yet, and an assistant entry carrying a tool_use is a
   // tool in progress.
   if (role === 'user' || hasToolUse) {
-    return now - movedAt > AGENT_STALE_MS ? 'stalled' : 'running';
+    const idle = now - movedAt;
+    if (idle <= AGENT_STALE_MS) return 'running';
+    // Stalled only inside the window; beyond it the agent is over, however
+    // untidily it stopped. See AGENT_ABANDONED_MS.
+    return idle <= AGENT_ABANDONED_MS ? 'stalled' : 'done';
   }
   // Everything else is an assistant entry with text or thinking, and CONTENT
   // CANNOT SETTLE IT. An assistant turn is split across several entries —
@@ -420,44 +445,139 @@ function agentState(entries, movedAt, now) {
  * JSON and throws, and the text is a multi-kilobyte paragraph rather than a row
  * label.
  */
-async function readAgents(dir, now, touched) {
+/** Agent filenames directly in one directory, cached on that directory's mtime. */
+async function agentFilesIn(dir, touched) {
   const st = await guard(() => stat(dir), null);
-  if (!st?.isDirectory()) return { agents: [], capped: 0 };
-
+  if (!st?.isDirectory()) return null;
   touched?.add(dir);
   const hit = dirCache.get(dir);
-  let names;
-  if (hit && hit.mtimeMs === st.mtimeMs) {
-    names = hit.names;
-  } else {
-    names = (await guard(() => readdir(dir), []))
-      .filter((f) => f.startsWith('agent-') && f.endsWith('.jsonl'));
-    dirCache.set(dir, { mtimeMs: st.mtimeMs, names });
+  if (hit && hit.mtimeMs === st.mtimeMs) return hit.names;
+  const names = (await guard(() => readdir(dir), []))
+    .filter((f) => f.startsWith('agent-') && f.endsWith('.jsonl'));
+  dirCache.set(dir, { mtimeMs: st.mtimeMs, names });
+  return names;
+}
+
+/**
+ * Every sub-agent of a session, including the ones a WORKFLOW dispatched.
+ *
+ * A workflow does not write into `subagents/`; it writes into
+ * `subagents/workflows/<wf-id>/`, one directory per workflow run, same
+ * `agent-<id>.jsonl` plus `.meta.json` shape. Scanning only the top level meant
+ * the board reported "44 SUB-AGENTS ALL 44 RETURNED" for a session whose own
+ * terminal read "waiting for 2 dynamic workflows to finish" — 44 found against
+ * 134 workflow agent files sitting one directory down, unread. The operator
+ * caught it by comparing the board against the terminal beside it.
+ *
+ * That is this module's founding defect in a new place: a count that is
+ * confidently wrong is worse than no count, and it was wrong by 134.
+ */
+/**
+ * What a workflow calls itself, and whether it has finished.
+ *
+ * `<session>/workflows/<wf-id>.json` — a sibling of `subagents/`, not inside it.
+ * It carries `workflowName` ("upload-truncation-fixes"), a `summary`, and a
+ * `status`. Both facts are ones nothing else on disk provides:
+ *
+ *  - The agents' own `meta.json` has no `description` at all, only
+ *    `agentType: "workflow-subagent"`, so every workflow agent rendered as the
+ *    literal string "workflow-subagent" — 64 identical rows saying nothing.
+ *  - `status: "completed"` settles whether its agents are finished. The time
+ *    horizon below is a guess standing in for exactly this, and a stated fact
+ *    beats a guess whenever one is available.
+ */
+async function readWorkflow(sessionDir, wf, touched) {
+  const path = join(sessionDir, 'workflows', `${wf}.json`);
+  const raw = await cached(path, async () => {
+    const fh = await open(path, 'r');
+    try { return JSON.parse(await fh.readFile('utf8')); } finally { await fh.close(); }
+  }, touched);
+  if (raw && typeof raw === 'object') {
+    return {
+      name: typeof raw.workflowName === 'string' ? raw.workflowName : '',
+      summary: typeof raw.summary === 'string' ? raw.summary : '',
+      done: raw.status === 'completed' || raw.status === 'failed',
+    };
+  }
+  // NO SIDECAR MEANS STILL RUNNING. It is written when a workflow finishes, so
+  // the workflows with no name were exactly the ones worth naming. The script is
+  // persisted at LAUNCH as `scripts/<name>-<wf-id>.js`, so the filename carries
+  // the name for the whole life of the run — and the absence of the sidecar is
+  // itself the evidence that it has not finished.
+  const name = await scriptName(sessionDir, wf, touched);
+  return name ? { name, summary: '', done: false } : null;
+}
+
+/** wf-id → workflow name, from the filenames in `workflows/scripts/`. */
+async function scriptName(sessionDir, wf, touched) {
+  const dir = join(sessionDir, 'workflows', 'scripts');
+  const st = await guard(() => stat(dir), null);
+  if (!st?.isDirectory()) return '';
+  touched?.add(dir);
+  let hit = dirCache.get(dir);
+  if (!hit || hit.mtimeMs !== st.mtimeMs) {
+    hit = { mtimeMs: st.mtimeMs, names: await guard(() => readdir(dir), []) };
+    dirCache.set(dir, hit);
+  }
+  const suffix = `-${wf}.js`;
+  const file = hit.names.find((f) => f.endsWith(suffix));
+  return file ? file.slice(0, -suffix.length) : '';
+}
+
+async function readAgents(dir, now, touched, sessionDir) {
+  const top = await agentFilesIn(dir, touched);
+  if (top === null) return { agents: [], capped: 0 };
+
+  // `<dir>/workflows/*/`. One level, not a recursive walk: the layout is known,
+  // and a walk over a directory this module does not own is how a parse path
+  // acquires an unbounded cost.
+  const found = top.map((file) => ({ dir, file }));
+  const wfRoot = join(dir, 'workflows');
+  const wfSt = await guard(() => stat(wfRoot), null);
+  if (wfSt?.isDirectory()) {
+    touched?.add(wfRoot);
+    let wfDirs = dirCache.get(wfRoot);
+    if (!wfDirs || wfDirs.mtimeMs !== wfSt.mtimeMs) {
+      const entries = await guard(() => readdir(wfRoot, { withFileTypes: true }), []);
+      wfDirs = { mtimeMs: wfSt.mtimeMs, names: entries.filter((e) => e.isDirectory()).map((e) => e.name) };
+      dirCache.set(wfRoot, wfDirs);
+    }
+    for (const wf of wfDirs.names) {
+      const sub = join(wfRoot, wf);
+      const names = await agentFilesIn(sub, touched);
+      if (!names?.length) continue;
+      const meta = await readWorkflow(sessionDir, wf, touched);
+      for (const file of names) found.push({ dir: sub, file, workflow: wf, wfMeta: meta });
+    }
   }
 
   const stamped = [];
-  for (const file of names) {
-    const s = await guard(() => stat(join(dir, file)), null);
-    if (s) stamped.push({ file, movedAt: s.mtimeMs, birth: s.birthtimeMs || 0 });
+  for (const { dir: d, file, workflow, wfMeta } of found) {
+    const s = await guard(() => stat(join(d, file)), null);
+    if (s) stamped.push({ dir: d, file, workflow, wfMeta, movedAt: s.mtimeMs, birth: s.birthtimeMs || 0 });
   }
   stamped.sort((a, b) => b.movedAt - a.movedAt);
   const capped = Math.max(0, stamped.length - SUBAGENT_CAP);
   const take = stamped.slice(0, SUBAGENT_CAP);
 
   const agents = [];
-  for (const { file, movedAt, birth } of take) {
+  for (const { dir: d, file, workflow, wfMeta, movedAt, birth } of take) {
     const id = file.slice('agent-'.length, -'.jsonl'.length);
-    const meta = await cached(join(dir, `agent-${id}.meta.json`), async () => {
-      const fh = await open(join(dir, `agent-${id}.meta.json`), 'r');
+    const meta = await cached(join(d, `agent-${id}.meta.json`), async () => {
+      const fh = await open(join(d, `agent-${id}.meta.json`), 'r');
       try { return JSON.parse(await fh.readFile('utf8')); } finally { await fh.close(); }
     }, touched);
-    const entries = await cached(join(dir, file), () => tailEntries(join(dir, file)), touched);
+    const entries = await cached(join(d, file), () => tailEntries(join(d, file)), touched);
     if (!entries) continue;
 
     agents.push({
       // Short and opaque; enough to tell two rows apart, carries no path.
       id: id.slice(0, 8),
-      label: typeof meta?.description === 'string' ? meta.description : '',
+      // The workflow's own name for a workflow agent, because its sidecar has no
+      // description and `agentType` is the same literal for every one of them.
+      label: typeof meta?.description === 'string' && meta.description
+        ? meta.description
+        : (wfMeta?.name || ''),
       agentType: typeof meta?.agentType === 'string' ? meta.agentType : '',
       depth: Number.isInteger(meta?.spawnDepth) ? meta.spawnDepth : 1,
       parent: typeof meta?.parentAgentId === 'string' ? meta.parentAgentId.slice(0, 8) : '',
@@ -468,9 +588,13 @@ async function readAgents(dir, now, touched) {
       // median 265s, worst 2,211s, which rendered a 44-minute agent as `+7m`
       // and mis-sorted the rows, since they order by this field. birthtime
       // matched the true first timestamp on all 35 files.
+      // Which workflow dispatched it, when one did. Empty for a direct dispatch.
+      workflow: workflow ?? '',
       started: birth ? new Date(birth).toISOString() : firstStamp(entries),
       movedAt: new Date(movedAt).toISOString(),
-      state: agentState(entries, movedAt, now),
+      // A finished workflow settles its agents, whatever their transcripts stop
+      // mid-doing. This is the fact the abandonment horizon was approximating.
+      state: wfMeta?.done ? 'done' : agentState(entries, movedAt, now),
     });
   }
   agents.sort((a, b) => String(a.started).localeCompare(String(b.started)));
@@ -534,7 +658,8 @@ async function readOne(session, now, touched) {
     : silent > SESSION_STALE_MS ? 'stalled'
       : 'running';
 
-  const { agents, capped } = await readAgents(join(dir, pid.sessionId, 'subagents'), now, touched);
+  const sessionDir = join(dir, pid.sessionId);
+  const { agents, capped } = await readAgents(join(sessionDir, 'subagents'), now, touched, sessionDir);
 
   return {
     status,
