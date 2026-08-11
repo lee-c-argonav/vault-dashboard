@@ -143,3 +143,83 @@ test('silence stops moving the digest once it is long', () => {
   assert.equal(boardDigest(twenty, NOW), boardDigest(aDay, NOW),
     'a terminal left open overnight kept firing deploys');
 });
+
+/** A fan-out with enough returned agents for the estimator to have samples. */
+function fanoutBoard(outCount = 1, doneCount = 6) {
+  const b = hostileBoard();
+  const mins = (n) => new Date(NOW - n * 60_000).toISOString();
+  b.unpublished[0].agents = [
+    // Each returned agent took ten minutes.
+    ...Array.from({ length: doneCount }, (_, i) => ({
+      id: `d${i}`, state: 'done', label: 'a returned agent',
+      started: mins(60), movedAt: mins(50),
+    })),
+    ...Array.from({ length: outCount }, (_, i) => ({
+      id: `o${i}`, state: 'running', label: 'an agent still out', started: mins(2),
+    })),
+  ];
+  return b;
+}
+
+test('a fan-out publishes how long it has left, bucketed', () => {
+  const s = toPublicBoard(fanoutBoard(), NOW).unpublished[0];
+  // Ten-minute mean, two minutes elapsed on the one still out.
+  assert.equal(s.etaMins, 10, 'the estimate did not reach the page');
+  assert.equal(s.agentsOut, 1);
+});
+
+test('a fan-out with nothing out publishes no estimate', () => {
+  const s = toPublicBoard(fanoutBoard(0, 6), NOW).unpublished[0];
+  assert.equal(s.etaMins, null, 'estimated time left for work that has finished');
+});
+
+test('the estimate never carries an agent label to the page', () => {
+  const json = JSON.stringify(toPublicBoard(fanoutBoard(), NOW));
+  assert.ok(!json.includes('an agent still out'), 'an agent label rode in on the estimate');
+  assert.ok(!json.includes('a returned agent'));
+});
+
+test('the estimate moves the digest, so the phone cannot show it wrong forever', () => {
+  const near = fanoutBoard(1, 6);
+  const far = fanoutBoard(1, 6);
+  // Same shape, but each returned agent took an hour rather than ten minutes.
+  far.unpublished[0].agents = far.unpublished[0].agents.map((a) => (a.state === 'done'
+    ? { ...a, started: new Date(NOW - 120 * 60_000).toISOString() } : a));
+  assert.notEqual(boardDigest(near, NOW), boardDigest(far, NOW));
+});
+
+test('the estimate is snapped to a step, so it does not fire a deploy every tick', () => {
+  // Two long fan-outs a few minutes apart. A fixed five-minute bucket moved the
+  // digest here; the widening scale does not, because up at the hour mark the
+  // steps are fifteen minutes wide and nothing that far out is a decision.
+  const long = (elapsedMins) => {
+    const b = fanoutBoard(1, 6);
+    b.unpublished[0].agents = b.unpublished[0].agents.map((a) => (a.state === 'done'
+      ? { ...a, started: new Date(NOW - 120 * 60_000).toISOString(),
+        movedAt: new Date(NOW - 60 * 60_000).toISOString() }
+      : { ...a, started: new Date(NOW - elapsedMins * 60_000).toISOString() }));
+    return b;
+  };
+  assert.equal(boardDigest(long(2), NOW), boardDigest(long(5), NOW),
+    'three minutes of drift fired a deploy');
+});
+
+test('the scale is finest where it changes what you do', () => {
+  // Near the end the steps are five minutes wide; an hour out they are fifteen.
+  const at = (leftMins) => {
+    const b = fanoutBoard(1, 6);
+    b.unpublished[0].agents = b.unpublished[0].agents.map((a) => (a.state === 'done'
+      ? { ...a, started: new Date(NOW - leftMins * 60_000).toISOString(), movedAt: new Date(NOW).toISOString() }
+      : { ...a, started: new Date(NOW).toISOString() }));
+    return toPublicBoard(b, NOW).unpublished[0].etaMins;
+  };
+  assert.equal(at(4), 5, 'four minutes left should read as five, not rounded away');
+  assert.equal(at(12), 15);
+  assert.equal(at(200), 120, 'anything beyond the top step reads as the top step');
+});
+
+test('projecting an already-projected board keeps the estimate', () => {
+  const once = toPublicBoard(fanoutBoard(), NOW);
+  const twice = toPublicBoard(once, NOW);
+  assert.equal(twice.unpublished[0].etaMins, once.unpublished[0].etaMins);
+});

@@ -24,7 +24,7 @@ import {
   LABEL, runState, stateText, durationOf, unitWindow, expandSet, askOf, quietMs,
   eta, etaText, elapsedText, humanMs, counts, partitionRuns, linkSessions, batchStamped,
   STALE_MS,
-  sessionContext, sortRank, blockedNote, FINISHED_MAX_AGE_MS,
+  sessionContext, sortRank, blockedNote, FINISHED_MAX_AGE_MS, agentEta,
 } from '../public/runs-view.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -156,6 +156,39 @@ export function toPublicBoard(board, now) {
       agentsCapped: s.agentsCapped ?? 0,
     };
   };
+  /**
+   * Time left on a fan-out, coarsened for publication.
+   *
+   * SNAPPED TO A WIDENING SCALE, not to a fixed interval. The raw estimate falls
+   * continuously as the oldest agent's elapsed time grows, and a continuously
+   * moving field in the digest makes every tick a deploy — the defect
+   * `silentBucket` was bucketed to avoid.
+   *
+   * A fixed five-minute bucket was written first and was wrong twice over. It
+   * moved the digest every five minutes for the whole life of a fan-out, which
+   * is twelve deploys an hour from one field; and it spent its precision where
+   * nobody needs it, because the difference between 55 and 60 minutes is not a
+   * decision and the difference between 5 and 10 is.
+   *
+   * The scale widens instead, so the estimate is precise where it changes what
+   * you do and coarse where it does not. An hour-long fan-out crosses three
+   * steps rather than twelve.
+   *
+   * A midpoint, where the desktop shows the full range. The phone is the coarse
+   * surface by design and two bounds cross a step twice as often as one.
+   */
+  const ETA_STEPS = [5, 10, 15, 30, 45, 60, 90, 120];
+  const etaMins = (s) => {
+    if (!Array.isArray(s.agents)) return s.etaMins ?? null;   // already projected
+    const e = agentEta(s.agents, now);
+    if (!e) return null;
+    const ms = e.point ?? ((e.low + e.high) / 2);
+    if (!Number.isFinite(ms) || ms <= 0) return null;
+    const mins = ms / 60_000;
+    // The first step at or above the estimate; the top step means "at least".
+    return ETA_STEPS.find((step) => mins <= step) ?? ETA_STEPS[ETA_STEPS.length - 1];
+  };
+
   const session = (s) => (s ? {
     // No pid: the phone cannot focus a terminal, so it is identity with no use.
     status: s.status ?? '',
@@ -174,6 +207,7 @@ export function toPublicBoard(board, now) {
       ? Math.min(2, Math.floor(Math.max(0, now - Date.parse(s.movedAt)) / (5 * 60_000)))
       : (s.silentBucket ?? null),
     ...agentCounts(s),
+    etaMins: etaMins(s),
   } : null);
 
   const run = (r) => ({
@@ -330,7 +364,8 @@ export function boardDigest(rawBoard, now = null) {
     // the exact failure this digest exists to prevent, and already fixed for the
     // unpublished half while the run half was left behind.
     r.session ? [r.session.status ?? '', r.session.since ?? '', r.session.silentBucket,
-      r.session.agentsOut, r.session.agentsTotal, r.session.agentsCapped].join(':') : null,
+      r.session.agentsOut, r.session.agentsTotal, r.session.agentsCapped,
+      r.session.etaMins].join(':') : null,
     r.units.map((u) => [u.id, u.label, u.state, u.started, u.ended,
       u.agents.map((a) => [a.label, a.state, a.started, a.ended])]),
     r.needsInput.map((n) => [n.question, n.since]),
@@ -353,7 +388,8 @@ export function boardDigest(rawBoard, now = null) {
     // renders. `silentBucket` is already coarse, so it advances at the bucket
     // and not on the clock.
     sessions: unpublished.map((s) => [
-      s.since, s.status, s.silentBucket, s.agentsOut, s.agentsTotal, s.agentsCapped, s.context,
+      s.since, s.status, s.silentBucket, s.agentsOut, s.agentsTotal, s.agentsCapped,
+      s.etaMins, s.context,
     ]),
   })).digest('hex');
 }
@@ -600,7 +636,10 @@ function runCard(r, now, expanded) {
   ${r.session?.agentsTotal ? `<p class="agents">${
     r.session.agentsTotal + (r.session.agentsCapped || 0)} sub-agents — ${
     r.session.agentsOut
-      ? `${r.session.agentsOut} still running, ${r.session.agentsTotal - r.session.agentsOut} returned`
+      ? `${r.session.agentsOut} still running, ${r.session.agentsTotal - r.session.agentsOut} returned${
+        r.session.etaMins
+          ? (r.session.etaMins >= 120 ? ' — 2h+ left' : ` — ~${r.session.etaMins}m left`)
+          : ''}`
       : `all ${r.session.agentsTotal} returned`}</p>` : ''}
   <div class="foot">
     <span><span class="mach">${esc(r.machine)}</span> · ${c.done} of ${c.total} done${elapsed ? ` · ${elapsed}` : ''}</span>
@@ -658,6 +697,9 @@ function sessionSection(sessions, now) {
     else if (s.agentsTotal) bits.push(`${s.agentsTotal} sub-agents, all returned`);
     // Bucketed at five minutes by the projection, so the phrase is honest about
     // its own resolution rather than implying a precision it does not have.
+    // The estimate rides the same line as the counts, because it is the same
+    // fact continued: how many are out, and how long they have left.
+    if (s.etaMins) bits.push(s.etaMins >= 120 ? '2h+ left' : `~${s.etaMins}m left`);
     if (s.silentBucket) bits.push(`silent ${s.silentBucket * 5}m+`);
     return `<div class="sess is-${esc(s.status || 'unknown')}"><div class="sess-head"><i class="dot"></i>`
       + `<span class="sl">session ${String(i + 1).padStart(2, '0')}</span>`
