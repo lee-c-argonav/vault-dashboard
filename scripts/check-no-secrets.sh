@@ -89,9 +89,34 @@ fi
 
 # git grep HEAD only sees committed content, which is exactly what a push sends.
 # .env.example and this script are excluded; allowed placeholders are filtered after.
+#
+# WHY THIS MATCHES WITH /usr/bin/grep RATHER THAN `git grep -E`. Git's extended
+# regex does not implement `\b`. A pattern written `\bname\b` therefore matched
+# NOTHING on the tree while matching correctly in commit messages and identities,
+# which go through /usr/bin/grep. Four entries in .confidential-patterns are
+# written that way — the firm, the product codename, the owner's first name and
+# the teammate list — so the file scan enforced none of them, and the gate looked
+# like it was working because two of its three surfaces were. Found 2026-08-11;
+# nothing had leaked, every one of the four returned zero hits against the tree
+# once run with a working engine.
+#
+# The whole tree's text is materialised once and matched with the same engine as
+# the other two scans, so all three surfaces agree on what a pattern means. The
+# `REF:path:line:` prefix is part of each line deliberately: a confidential
+# identifier in a FILENAME is as pushed as one in a file body.
+TREE_TEXT=''
+TREE_READ=0
+tree_text() {
+  if [ "$TREE_READ" -eq 0 ]; then
+    TREE_TEXT=$(git grep -I -n -e '.' "$REF" -- . ':!.env.example' ":!$SELF" 2>/dev/null)
+    TREE_READ=1
+  fi
+  printf '%s\n' "$TREE_TEXT"
+}
+
 scan() { # $1 = human label, $2 = extended-regex
   local hits
-  hits=$(git grep -nIiE "$2" "$REF" -- . ':!.env.example' ":!$SELF" 2>/dev/null | grep -vE "$ALLOW")
+  hits=$(tree_text | grep -IiE "$2" | grep -vE "$ALLOW")
   if [ -n "$hits" ]; then
     report "$1"
     printf '%s\n' "$hits" | sed 's/^/      /'
@@ -132,6 +157,34 @@ scan_identity() { # $1 = human label, $2 = extended-regex
 }
 
 scan_both() { scan "$1" "$2"; scan_msgs "$1" "$2"; scan_identity "$1" "$2"; }
+
+# Self-test, before any pattern is trusted. This gate ran for months with four
+# patterns that silently matched nothing, and a scan that cannot fail is
+# indistinguishable from a scan that passes. Two assertions: the engine honours
+# `\b`, and a planted identifier is actually caught through the real scan path.
+# Both fail closed — a gate that cannot verify itself must not report clean.
+selftest() {
+  # The probe literal is deliberately synthetic. A plausible word here would be a
+  # false positive in any repo whose own patterns happen to contain it and whose
+  # copy of this script sits outside the excluded $SELF path.
+  if ! printf 'ref:path:1:a codename zqprobeqz appears here\n' | grep -qIiE '\bzqprobeqz\b'; then
+    printf '  \033[31m✗ regex engine does not honour \\b — pattern scans cannot be trusted\033[0m\n'
+    return 1
+  fi
+  # Same path a real finding takes: tree-shaped line, case-insensitive, ALLOW filter.
+  local probe
+  probe=$(printf 'ref:path/to/file.md:12:the Zqprobeqz project\n' \
+    | grep -IiE '\bzqprobeqz\b' | grep -vE "$ALLOW")
+  if [ -z "$probe" ]; then
+    printf '  \033[31m✗ scan path drops a planted identifier — the gate is not enforcing\033[0m\n'
+    return 1
+  fi
+  return 0
+}
+if ! selftest; then
+  printf '\n\033[31mPRE-PUSH CHECK ABORTED.\033[0m The gate could not verify its own matcher.\n'
+  exit 2
+fi
 
 # 3a. Secrets — structural, never sensitive to name here.
 scan_both "possible secret (JWT / API key / token / private key)" \
