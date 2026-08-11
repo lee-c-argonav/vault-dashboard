@@ -629,9 +629,19 @@ export function agentEta(agents, now = Date.now()) {
     const t = Date.parse(a.started);
     return Number.isFinite(t) ? now - t : 0;
   }));
+  // OVERRUN. When the one that has been out longest has already run past the
+  // top of the range, the returned agents no longer predict it — it is an
+  // outlier and the sample says nothing about how much it has left.
+  //
+  // Clamping at zero instead produced "<1m–<1m left" beside an agent showing
+  // +19m, which is the estimator asserting confidence it does not have, about
+  // the exact case where it has least. The operator caught it on the board.
+  // What is reported instead is the fact that IS known: how far past the usual
+  // span it has gone.
+  const high = mean + sd - oldest;
+  if (high <= 0) return { over: oldest - mean, usual: mean };
   const point = Math.max(0, mean - oldest);
   const low = Math.max(0, mean - sd - oldest);
-  const high = Math.max(0, mean + sd - oldest);
   return { point: sd === 0 ? point : null, low, high };
 }
 

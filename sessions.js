@@ -153,7 +153,14 @@ export function resetSessions() {
 export async function readSessions(opts = {}) {
   const now = opts.now ?? Date.now();
   const run = opts.run ?? sh;
-  if (now - cache.at < CACHE_MS) return cache.value;
+  // `age >= 0` as well as under the window. A backwards clock step — an NTP
+  // correction, a manual set — makes `now - cache.at` negative, which is always
+  // under CACHE_MS, so the cache reads as fresh and session discovery FREEZES
+  // until the clock climbs back past the stamp. Proven: sample at t=1,000,000,
+  // step back to 940,000, and a 60-second-stale cache is served without
+  // resampling. transcripts.js already guards this; this module predates it.
+  const age = now - cache.at;
+  if (age >= 0 && age < CACHE_MS) return cache.value;
 
   // The default runner resolves '' on failure, but an injected one may throw and
   // a future `sh` could too. This sits on the vault parse path, where an

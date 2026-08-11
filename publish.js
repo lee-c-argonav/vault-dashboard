@@ -119,14 +119,27 @@ async function decideAndDeploy(log) {
     // the real build when we decide to upload, and must keep doing so for the
     // manual path.
     //
-    // The clock is passed, and has to be. It is what applies the five-day
-    // window to finished runs, and reading without it produced a digest over a
-    // different board than the one deploy.sh renders: a run ageing out changed
-    // the page and not the check, so the last run to expire would have stayed
-    // on the phone until something else happened to move the digest. Nothing
-    // clock-derived is hashed — boardDigest takes only the run data — so this
-    // does not make the digest tick.
-    digest = boardDigest(await readBoard(process.env.VAULT_HUD_VAULT, undefined, Date.now()));
+    // The clock is passed to BOTH calls, and has to be. readBoard needs it to
+    // apply the five-day window to finished runs; reading without it produced a
+    // digest over a different board than the one deploy.sh renders.
+    //
+    // This used to add "nothing clock-derived is hashed", which was true when it
+    // was written and stopped being true the moment silence was bucketed into
+    // the digest. Clock-derived values ARE hashed now, deliberately and coarsely
+    // — silence at thirty minutes, an estimate on a widening scale — so the
+    // things that only change with time can still fire a deploy without the
+    // timer becoming one.
+    // The clock reaches boardDigest too, not only readBoard. Without it the
+    // silence bucket returns 0 for every board (build.js: `if (now === null)
+    // return 0`), so a run that simply STOPS WRITING produces an identical
+    // digest forever — measured: the same file at 0m, 45m, 3h and 8h quiet all
+    // hash to 05cc9d399a. No digest change, no deploy, and the phone serves
+    // RUNNING about a dead run indefinitely. Surfacing a stalled run is the one
+    // thing this page exists for, so it could not be the one thing the publisher
+    // could not see. A dying SESSION still deployed, because session presence is
+    // hashed directly, which is what hid this in every local test.
+    const now = Date.now();
+    digest = boardDigest(await readBoard(process.env.VAULT_HUD_VAULT, undefined, now), now);
   } catch (err) {
     last = { ...last, at: new Date().toISOString(), ok: false, error: String(err.message).trim() };
     log(`[vault-hud] publish failed before upload: ${last.error}\n`);
@@ -139,8 +152,12 @@ async function decideAndDeploy(log) {
   // Something changed, but not long enough since the last upload. Return
   // WITHOUT recording the digest, so the next tick uploads it rather than
   // treating a rate-limited change as published.
+  // Same guard as the caches: a backwards clock step makes `since` negative,
+  // which is under the interval, so deploys are throttled until the clock climbs
+  // back past `lastDeployAt`. Negative means the stamp is in the future and is
+  // no longer evidence of anything, so it is treated as no stamp at all.
   const since = Date.now() - lastDeployAt;
-  if (lastDeployAt && since < MIN_DEPLOY_INTERVAL_MS) {
+  if (lastDeployAt && since >= 0 && since < MIN_DEPLOY_INTERVAL_MS) {
     last = {
       ...last, at: new Date().toISOString(), ok: true, error: '',
       throttled: (last.throttled ?? 0) + 1,

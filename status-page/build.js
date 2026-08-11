@@ -24,7 +24,7 @@ import {
   LABEL, runState, stateText, durationOf, unitWindow, expandSet, askOf, quietMs,
   eta, etaText, elapsedText, humanMs, counts, partitionRuns, linkSessions, batchStamped,
   STALE_MS,
-  sessionContext, sortRank, blockedNote, FINISHED_MAX_AGE_MS, agentEta,
+  sessionContext, sortRank, blockedNote, FINISHED_MAX_AGE_MS, agentEta, URGENCY,
   attentionModel, attentionCaption,
 } from '../public/runs-view.js';
 
@@ -179,15 +179,24 @@ export function toPublicBoard(board, now) {
    * surface by design and two bounds cross a step twice as often as one.
    */
   const ETA_STEPS = [5, 10, 15, 30, 45, 60, 90, 120];
-  const etaMins = (s) => {
-    if (!Array.isArray(s.agents)) return s.etaMins ?? null;   // already projected
+  const etaOf = (s) => {
+    if (!Array.isArray(s.agents)) {                            // already projected
+      return { etaMins: s.etaMins ?? null, etaOver: s.etaOver ?? false };
+    }
     const e = agentEta(s.agents, now);
-    if (!e) return null;
+    if (!e) return { etaMins: null, etaOver: false };
+    // An overrun is not a small number, it is the absence of one. Without this
+    // the arithmetic below yields NaN and the phone silently drops the line,
+    // which reads as "no fan-out" rather than "this one has outrun its sample".
+    if (e.over) return { etaMins: null, etaOver: true };
     const ms = e.point ?? ((e.low + e.high) / 2);
-    if (!Number.isFinite(ms) || ms <= 0) return null;
+    if (!Number.isFinite(ms) || ms <= 0) return { etaMins: null, etaOver: false };
     const mins = ms / 60_000;
     // The first step at or above the estimate; the top step means "at least".
-    return ETA_STEPS.find((step) => mins <= step) ?? ETA_STEPS[ETA_STEPS.length - 1];
+    return {
+      etaMins: ETA_STEPS.find((step) => mins <= step) ?? ETA_STEPS[ETA_STEPS.length - 1],
+      etaOver: false,
+    };
   };
 
   const session = (s) => (s ? {
@@ -208,7 +217,7 @@ export function toPublicBoard(board, now) {
       ? Math.min(2, Math.floor(Math.max(0, now - Date.parse(s.movedAt)) / (5 * 60_000)))
       : (s.silentBucket ?? null),
     ...agentCounts(s),
-    etaMins: etaMins(s),
+    ...etaOf(s),
   } : null);
 
   const run = (r) => ({
@@ -366,7 +375,7 @@ export function boardDigest(rawBoard, now = null) {
     // unpublished half while the run half was left behind.
     r.session ? [r.session.status ?? '', r.session.since ?? '', r.session.silentBucket,
       r.session.agentsOut, r.session.agentsTotal, r.session.agentsCapped,
-      r.session.etaMins].join(':') : null,
+      r.session.etaMins, r.session.etaOver].join(':') : null,
     r.units.map((u) => [u.id, u.label, u.state, u.started, u.ended,
       u.agents.map((a) => [a.label, a.state, a.started, a.ended])]),
     r.needsInput.map((n) => [n.question, n.since]),
@@ -390,7 +399,7 @@ export function boardDigest(rawBoard, now = null) {
     // and not on the clock.
     sessions: unpublished.map((s) => [
       s.since, s.status, s.silentBucket, s.agentsOut, s.agentsTotal, s.agentsCapped,
-      s.etaMins, s.context,
+      s.etaMins, s.etaOver, s.context,
     ]),
   })).digest('hex');
 }
@@ -653,9 +662,10 @@ function runCard(r, now, expanded) {
     r.session.agentsTotal + (r.session.agentsCapped || 0)} sub-agents — ${
     r.session.agentsOut
       ? `${r.session.agentsOut} still running, ${r.session.agentsTotal - r.session.agentsOut} returned${
-        r.session.etaMins
-          ? (r.session.etaMins >= 120 ? ' — 2h+ left' : ` — ~${r.session.etaMins}m left`)
-          : ''}`
+        r.session.etaOver ? ' — past the usual'
+          : r.session.etaMins
+            ? (r.session.etaMins >= 120 ? ' — 2h+ left' : ` — ~${r.session.etaMins}m left`)
+            : ''}`
       : `all ${r.session.agentsTotal} returned`}</p>` : ''}
   <div class="foot">
     <span><span class="mach">${esc(r.machine)}</span> · ${c.done} of ${c.total} done${elapsed ? ` · ${elapsed}` : ''}</span>
@@ -715,7 +725,8 @@ function sessionSection(sessions, now) {
     // its own resolution rather than implying a precision it does not have.
     // The estimate rides the same line as the counts, because it is the same
     // fact continued: how many are out, and how long they have left.
-    if (s.etaMins) bits.push(s.etaMins >= 120 ? '2h+ left' : `~${s.etaMins}m left`);
+    if (s.etaOver) bits.push('past the usual');
+    else if (s.etaMins) bits.push(s.etaMins >= 120 ? '2h+ left' : `~${s.etaMins}m left`);
     if (s.silentBucket) bits.push(`silent ${s.silentBucket * 5}m+`);
     return `<div class="sess is-${esc(s.status || 'unknown')}"><div class="sess-head"><i class="dot"></i>`
       + `<span class="sl">session ${String(i + 1).padStart(2, '0')}</span>`
@@ -788,7 +799,10 @@ export async function build(opts = {}) {
   const expand = expandSet(active);
 
   // Group by repo, worst urgency first, exactly as the HUD does.
-  const rank = { 'needs-input': 0, blocked: 1, running: 2, paused: 3, done: 4 };
+  // URGENCY, imported. This was a hand-copy of it, which is the exact drift
+  // ERRORS.md's 2026-08-06 entry warns about and the reason runs-view.js exists:
+  // two readers that reimplement a rule eventually disagree about it.
+  const rank = URGENCY;
   const byRepo = new Map();
   for (const r of active) {
     const key = r.project || '—';

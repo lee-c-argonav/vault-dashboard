@@ -154,3 +154,24 @@ test('the digest still ignores the clock inside the window', async () => {
   assert.equal(a, b, 'ninety minutes of elapsed time is not a change to the board');
   await rm(root, { recursive: true, force: true });
 });
+
+// The caller, not just the function. boardDigest's silence bucket was correct
+// and tested; the publisher called it with one argument, so the bucket returned
+// 0 for every board and a run going quiet could never fire a deploy. The
+// function's own tests all passed throughout, because they pass the clock.
+//
+// A source assertion rather than a spy: this repo has no mocking library and
+// wants none, and the same idiom already guards the CSS encoding. It is narrow
+// and it would have caught the defect that shipped.
+test('the publisher passes the clock to boardDigest', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { fileURLToPath } = await import('node:url');
+  const { join, dirname } = await import('node:path');
+  const src = await readFile(
+    join(dirname(fileURLToPath(import.meta.url)), '..', 'publish.js'), 'utf8',
+  );
+  const call = src.match(/boardDigest\([^;]*\)/s);
+  assert.ok(call, 'publish.js no longer calls boardDigest — update this test');
+  assert.match(call[0], /,\s*now\s*\)/,
+    'boardDigest is called without the clock, so silence cannot move the digest');
+});

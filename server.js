@@ -2,6 +2,12 @@
 // vault-hud — read-only HTTP + SSE server for an Obsidian vault.
 // Never writes to the vault. Binds loopback only.
 
+// FIRST, and the order is load-bearing. This loads ./.env as a side effect, and
+// ES modules evaluate imports before the importing module's body — so every knob
+// read at another module's scope (VAULT_HUD_METRICS_MS, VAULT_HUD_MIN_DEPLOY_MS,
+// VAULT_HUD_AGENTS) was captured before the old in-body load ever ran. See env.js.
+import './env.js';
+
 import { createServer } from 'node:http';
 import { createReadStream, watch } from 'node:fs';
 import { stat } from 'node:fs/promises';
@@ -17,13 +23,8 @@ import { startPublishing, stopPublishing, publishStatus } from './publish.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-// Load ./.env if present (zero-dependency; Node 20.12+). Config and the paths in
-// tools.json live there, never in the tracked source. Missing file is fine.
-try {
-  process.loadEnvFile(path.join(HERE, '.env'));
-} catch {
-  /* no .env — fall back to real env and defaults below */
-}
+// .env is loaded by ./env.js, imported first above. It cannot be loaded here:
+// this body runs after every import has already read what it needs.
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.VAULT_HUD_PORT ?? 5959);
@@ -114,8 +115,18 @@ function publish(state) {
  * warning appended, so the window degrades to stale data instead of blanking.
  * Returns the parse duration in ms.
  */
+let refreshInFlight = false;
+
 async function refresh() {
   const started = process.hrtime.bigint();
+  // Overlap guard. Three paths call this directly — the 10s safety interval, the
+  // debounced watcher and the midnight rollover — and two parses completing out
+  // of order publish the OLDER State last, which stands until the next interval.
+  // `scheduleSessionRefresh` has had both a flag and a generation check since
+  // this morning; the full parse had only the generation counter, which protects
+  // the partial refresh from it and not it from itself.
+  if (refreshInFlight) return 0;
+  refreshInFlight = true;
   try {
     const state = await parseVault(VAULT);
     lastGood = state;
@@ -133,6 +144,8 @@ async function refresh() {
         `parse failed at ${new Date().toISOString()}, showing last good data (${err?.message ?? err})`
       ]
     });
+  } finally {
+    refreshInFlight = false;
   }
   return Number(process.hrtime.bigint() - started) / 1e6;
 }

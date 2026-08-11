@@ -377,7 +377,12 @@ function branchOf(entries) {
 function agentState(entries, movedAt, now) {
   const last = lastMessage(entries);
   // No message yet: just dispatched, not finished.
-  if (!last) return now - movedAt > AGENT_STALE_MS ? 'stalled' : 'running';
+  // 'open' — dispatched, nothing written yet. It was handled in six places
+  // across three files and produced by none, and a comment claimed this branch
+  // returned it while the code returned 'running'. Produced now, because the
+  // distinction is real: an agent with no message yet has not necessarily
+  // started, and every consumer already counts it as out.
+  if (!last) return now - movedAt > AGENT_STALE_MS ? 'stalled' : 'open';
 
   const role = last.message?.role;
   const hasToolUse = blocks(last).some((b) => b?.type === 'tool_use');

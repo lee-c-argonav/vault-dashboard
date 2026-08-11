@@ -610,7 +610,18 @@ function agentList(agents, capped, now) {
 
   // Time left on the fan-out, estimated from the ones that already came back.
   const e = out.length ? agentEta(agents, now) : null;
-  if (e) head.append(el('span', 'run-agents-eta', etaText(e)));
+  if (e?.over) {
+    // Past the usual span. Amber, because this is the same "wants a look" the
+    // rest of the board spends amber on, and it is a different claim from a
+    // countdown — it says the sample stopped predicting, not that time remains.
+    const over = el('span', 'run-agents-eta is-over',
+      `${humanMs(e.over)} PAST THE USUAL ${humanMs(e.usual)}`);
+    over.title = 'The longest-running agent has outrun every one that returned, '
+      + 'so how much it has left is not estimable from them.';
+    head.append(over);
+  } else if (e) {
+    head.append(el('span', 'run-agents-eta', etaText(e)));
+  }
   wrap.append(head);
 
   // When nothing is out, name the most recent returns instead of showing a bare

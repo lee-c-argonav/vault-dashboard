@@ -12,6 +12,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { toPublicBoard, build, boardDigest } from '../status-page/build.js';
 
 const NOW = Date.parse('2026-08-11T18:00:00Z');
@@ -86,18 +89,34 @@ test('a run row keeps no session identity either', () => {
 });
 
 test('the rendered page contains none of the forbidden values', async () => {
-  const html = await build({
-    vault: null,
-    sessions: [],
-    now: NOW,
-    board: hostileBoard(),
-    dryRun: true,
-  }).catch(() => null);
-  // build() reads a vault; when it cannot, this case still has to mean
-  // something, so fall back to asserting on the projection's own render inputs.
-  const json = html ?? JSON.stringify(toPublicBoard(hostileBoard(), NOW));
-  for (const bad of FORBIDDEN) {
-    assert.ok(!String(json).includes(bad), `"${bad}" reached the page`);
+  // This RENDERS. The version it replaces passed `board` and `dryRun` options
+  // that `build()` does not accept, so `vault: null` fell through to the default
+  // vault, build threw, `.catch(() => null)` swallowed it, and the assertion
+  // re-ran the previous test's check on a JSON string. It could not fail, and on
+  // a shell exporting VAULT_HUD_VAULT it would have built from the real vault
+  // and overwritten status-page/status.html, because outDir defaults to the repo.
+  const vault = await mkdtemp(join(tmpdir(), 'vh-proj-'));
+  const out = await mkdtemp(join(tmpdir(), 'vh-proj-out-'));
+  await mkdir(join(vault, '15-Runs'), { recursive: true });
+  const b = hostileBoard();
+  // A run file carrying the session that must not be published.
+  await writeFile(join(vault, '15-Runs', 'r-1.json'), JSON.stringify({
+    schema: 1, runId: 'r-1', project: 'p', goal: 'g', machine: 'laptop',
+    state: 'running', note: '', started: '2026-08-11T14:00:00Z',
+    updated: '2026-08-11T17:00:00Z', needsInput: [], blockers: [], units: [],
+  }));
+  try {
+    const html = await readFile(await build({
+      vault, outDir: out, now: NOW, sessions: [b.unpublished[0]],
+    }), 'utf8');
+    for (const bad of FORBIDDEN) {
+      assert.ok(!html.includes(bad), `"${bad}" reached the rendered page`);
+    }
+    // And the render actually happened, so the assertions above meant something.
+    assert.match(html, /<article class="run/, 'nothing was rendered');
+  } finally {
+    await rm(vault, { recursive: true, force: true });
+    await rm(out, { recursive: true, force: true });
   }
 });
 
@@ -222,4 +241,25 @@ test('projecting an already-projected board keeps the estimate', () => {
   const once = toPublicBoard(fanoutBoard(), NOW);
   const twice = toPublicBoard(once, NOW);
   assert.equal(twice.unpublished[0].etaMins, once.unpublished[0].etaMins);
+});
+
+// The operator caught "<1m–<1m left" beside an agent showing +19m. The estimator
+// clamped a negative remainder to zero, so the one case where it knows least is
+// the one it sounded most certain about.
+test('an agent past every sample reports an overrun, not a countdown', () => {
+  const b = fanoutBoard();
+  // Six returned at ten minutes each; the one still out has been going an hour.
+  b.unpublished[0].agents = b.unpublished[0].agents.map((a) => (a.state === 'running'
+    ? { ...a, started: new Date(NOW - 60 * 60_000).toISOString() } : a));
+  const s = toPublicBoard(b, NOW).unpublished[0];
+  assert.equal(s.etaOver, true, 'an overrun was not reported');
+  assert.equal(s.etaMins, null, 'an overrun still published a countdown');
+});
+
+test('an overrun moves the digest, so the phone learns about it', () => {
+  const normal = fanoutBoard();
+  const overrun = fanoutBoard();
+  overrun.unpublished[0].agents = overrun.unpublished[0].agents.map((a) => (a.state === 'running'
+    ? { ...a, started: new Date(NOW - 60 * 60_000).toISOString() } : a));
+  assert.notEqual(boardDigest(normal, NOW), boardDigest(overrun, NOW));
 });

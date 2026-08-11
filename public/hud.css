@@ -730,6 +730,8 @@ body {
 /* Pushed right, like the run row's own ETA, so the two estimates line up as the
    same kind of statement rather than reading as part of the count. */
 .run-agents-eta { margin-left: auto; color: var(--dim); }
+/* An overrun is a different claim from a countdown, so it does not read as one. */
+.run-agents-eta.is-over { color: var(--amber); }
 
 /* Overflow markers at either end of the window, so a hidden unit is visible as
    a count rather than silently absent. */

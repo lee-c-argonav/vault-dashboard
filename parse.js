@@ -281,17 +281,21 @@ export default async function parseVault(vaultPath) {
   // GAP that stood in runs.js until 2026-08-10). A run that never appears with
   // nothing on screen explaining why is the worst failure this panel has.
   const runsDetail = await readRunsDetailed(root);
-  const runsRead = partitionRuns(runsDetail.runs);
+  // The archive is read BEFORE partitioning, not after. `partitionRuns` excludes
+  // archived ids from `active` for the interrupted-move case: a `cp` instead of
+  // a `mv`, or a move killed halfway, leaves a copy in 15-Runs still marked
+  // running. The phone has passed the archive since 2026-08-10 and the desktop
+  // never did, so the two surfaces disagreed — proven against a run present in
+  // both places: phone active [], desktop active ['r-1'], forever.
+  const archived = await readFinishedRunsDetailed(root).catch(() => ({ runs: [] }));
+  const runsRead = partitionRuns(runsDetail.runs, archived.runs ?? []);
   // Which sessions are actually alive, and which of them are telling nobody.
   // A run file is the only thing that ever put a session on this board, and
   // writing one is opt-in, so most sessions appeared nowhere. Observed liveness
   // is the floor under that.
   // The ARCHIVE too, not just 15-Runs. A session that closed its run out and
   // moved the file to 99-Archive/runs — step 9 of /close — got no goal-recall
-  // line and rendered NO STATUS. The phone's readBoard has partitioned against
-  // the archive since 2026-08-10 and the desktop never did, so the two surfaces
-  // disagreed about the case the recall line exists for.
-  const archived = await readFinishedRunsDetailed(root).catch(() => ({ runs: [] }));
+  // line and rendered NO STATUS.
   const { runs: linkedRuns, sessions: sessionsOut } = await observeSessions(
     runsRead.active,
     runsDetail.runs.filter((r) => r.state === 'done').concat(archived.runs ?? []),
@@ -458,10 +462,13 @@ export default async function parseVault(vaultPath) {
     // Live sessions that are publishing nothing. One line each; see sessions.js.
     sessions: sessionsOut,
     // Carried on State so the partial refresh can feed sessionContext the same
-    // finished runs a full parse would. Passing [] made a just-closed session's
-    // goal-recall line appear on the 10s parse and vanish on the next transcript
-    // write, oscillating for as long as the session kept working.
-    finishedRuns: runsDetail.runs.filter((r) => r.state === 'done'),
+    // finished runs a full parse would — BOTH halves, 15-Runs and the archive.
+    // Carrying only the first half was the same oscillation in a smaller form:
+    // /close moves the file to the archive, so the archived half is the common
+    // case, and the goal-recall line flipped between its goal and empty every
+    // ten seconds. Observed live over sixteen seconds before this was fixed.
+    finishedRuns: runsDetail.runs.filter((r) => r.state === 'done')
+      .concat(archived.runs ?? []),
     health: {
       notes: notes.length,
       links: linkCount,
