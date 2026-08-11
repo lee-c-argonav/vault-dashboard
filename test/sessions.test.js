@@ -257,3 +257,31 @@ test('a finished run is still offered, since no live run can claim it', () => {
   const linked = linkSessions([done], [s]);
   assert.match(sessionContext(linked.unpublished[0], linked.runs, T0 + min(3)), /Finished work/);
 });
+
+// A process description, so the offender line says what to clean up rather than
+// just naming a runtime. The process table is read with `ps -c`, which reports
+// the executable only, so the answer to "what is eating the machine" was the
+// word `node` — true, and useless on a machine running a dozen unrelated ones.
+test('describeArgs finds the distinguishing part of a command line', async () => {
+  const { describeArgs } = await import('../metrics.js');
+  const cases = [
+    ['/opt/homebrew/bin/node /Users/YOU/_npx/abc/node_modules/chrome-devtools-mcp/build/src/index.js',
+      'chrome-devtools automation browser'],
+    ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --type=renderer --x', 'browser tab'],
+    ['node /Users/YOU/repos/vault-hud/server.js', 'the HUD daemon itself'],
+    ['/usr/bin/python3 /Users/YOU/tools/train.py --epochs 3', 'train.py'],
+    ['/Applications/Slack.app/Contents/MacOS/Slack', 'Slack'],
+  ];
+  for (const [args, want] of cases) {
+    assert.equal(describeArgs(args), want, args.slice(0, 40));
+  }
+});
+
+test('describeArgs invents nothing when there is nothing to say', async () => {
+  const { describeArgs } = await import('../metrics.js');
+  // A kernel thread and a bare binary have no distinguishing argument. An empty
+  // detail renders as no detail, never as a guess.
+  for (const a of ['kernel_task', '', null, undefined, '/usr/sbin/bluetoothd']) {
+    assert.equal(describeArgs(a), '', JSON.stringify(a));
+  }
+});

@@ -387,18 +387,77 @@ async function sampleProcesses() {
   const memHot = topMem && topMem.rssBytes >= HOT_RSS_BYTES;
   let hot = null;
   if (cpuHot && (!memHot || topCpu.cpuPct / HOT_CPU_PCT >= topMem.rssBytes / HOT_RSS_BYTES)) {
-    hot = { name: topCpu.name, kind: 'cpu', cpuPct: topCpu.cpuPct, rssBytes: topCpu.rssBytes };
+    hot = { name: topCpu.name, pid: topCpu.pid, kind: 'cpu', cpuPct: topCpu.cpuPct, rssBytes: topCpu.rssBytes };
   } else if (memHot) {
-    hot = { name: topMem.name, kind: 'mem', cpuPct: null, rssBytes: topMem.rssBytes };
+    hot = { name: topMem.name, pid: topMem.pid, kind: 'mem', cpuPct: null, rssBytes: topMem.rssBytes };
   }
+  // WHAT IT IS, not just what it is called. The table above is read with `ps -c`,
+  // which reports the executable name only, so the answer to "what is eating the
+  // machine" was the word `node` — true and useless, since a dozen unrelated
+  // things on this machine are node.
+  //
+  // One targeted `ps` for the offender alone, never for the table: ~4ms, and only
+  // on a tick where something already crossed a threshold, so an idle machine
+  // pays nothing. The full argument list is far too long to render, so what is
+  // kept is the part that distinguishes one node from another.
+  if (hot) hot.detail = await describeProcess(hot.pid ?? topCpu?.pid ?? topMem?.pid);
+
   // `top` is returned whether or not it crossed HOT_CPU_PCT, because the OTHER
   // trigger — the machine as a whole being busy — is not knowable here. This
   // function samples the process table; the machine's CPU comes from tick deltas
   // in the loop below. The decision is made where both are in hand.
   const top = topCpu
-    ? { name: topCpu.name, kind: 'cpu', cpuPct: topCpu.cpuPct, rssBytes: topCpu.rssBytes }
+    ? { name: topCpu.name, pid: topCpu.pid, kind: 'cpu', cpuPct: topCpu.cpuPct, rssBytes: topCpu.rssBytes }
     : null;
   return { hot, top, count: rows.length };
+}
+
+/**
+ * The distinguishing part of a command line, and how long it has been up.
+ *
+ * Pure so it can be tested against captured `ps` output, in the style of
+ * sessions.js's parsers. What it looks for, in order:
+ *   1. A known marker — the automation browsers and MCP servers that accumulate
+ *      on this machine are the things most often worth killing, and their own
+ *      argument lists name them.
+ *   2. The script or bundle a runtime was handed: the last path segment of the
+ *      first argument that is not a flag. `node /a/b/server.js` is `server.js`.
+ *   3. Nothing, when neither is present. An empty detail renders as no detail
+ *      rather than as a guess.
+ */
+export function describeArgs(args) {
+  const a = String(args ?? '').trim();
+  if (!a) return '';
+  const MARKERS = [
+    [/chrome-devtools-mcp|--user-data-dir=[^ ]*chrome-devtools/, 'chrome-devtools automation browser'],
+    [/ms-playwright-mcp|@playwright\/mcp/, 'playwright automation browser'],
+    [/--type=renderer/, 'browser tab'],
+    [/npm exec|npx /, 'npm-run tool'],
+    [/vault-hud[^ ]*server\.js/, 'the HUD daemon itself'],
+  ];
+  for (const [re, label] of MARKERS) if (re.test(a)) return label;
+
+  const parts = a.split(/\s+/);
+  for (const part of parts.slice(1)) {
+    if (part.startsWith('-')) continue;
+    const leaf = part.split('/').filter(Boolean).pop();
+    if (leaf && /\.(js|mjs|cjs|py|ts|sh)$/.test(leaf)) return leaf;
+  }
+  // An .app bundle, which is what a GUI process usually is.
+  const app = a.match(/\/([^/]+)\.app\//);
+  return app ? app[1] : '';
+}
+
+/** One `ps` for one pid. Empty on any failure; a missing detail is not an error. */
+async function describeProcess(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return '';
+  const out = await run('ps', ['-o', 'etime=,args=', '-p', String(pid)]);
+  const line = String(out).trim();
+  if (!line) return '';
+  const m = line.match(/^(\S+)\s+(.*)$/);
+  if (!m) return '';
+  const detail = describeArgs(m[2]);
+  return detail ? `${detail} · up ${m[1]}` : `up ${m[1]}`;
 }
 
 // ── Sampling loop ─────────────────────────────────────────────────────────────
