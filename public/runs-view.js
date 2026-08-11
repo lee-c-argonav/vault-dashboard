@@ -663,36 +663,40 @@ export function agentEta(agents, now = Date.now()) {
   // fan-out with one agent stalled 90m advertised "~7m left".
   const done = list.filter((a) => a.state === 'done' && a.started && a.movedAt)
     .map((a) => Date.parse(a.movedAt) - Date.parse(a.started))
-    .filter((ms) => Number.isFinite(ms) && ms > 0);
+    .filter((ms) => Number.isFinite(ms) && ms > 0)
+    .sort((x, y) => x - y);
   if (done.length < MIN_SAMPLES) return null;
 
+  // Only what can still finish. A stalled agent has no time left; it has stopped.
   const live = list.filter((a) => a.state === 'running' || a.state === 'open');
   if (!live.length) return null;
 
-  const mean = done.reduce((a, b) => a + b, 0) / done.length;
-  const variance = done.reduce((a, b) => a + (b - mean) ** 2, 0) / done.length;
-  const sd = Math.sqrt(variance);
-  // How long the one that has been out longest still has, on the mean. Elapsed
-  // is subtracted because a running agent has already served part of its time —
-  // `eta` ignores that, which a queue can absorb and a batch cannot.
+  // PERCENTILES, NOT mean AND sd. Agent runtimes are heavy-tailed — measured on
+  // this machine, 64 returned agents with a mean of 8m and a MAX of 34m — so
+  // mean+sd sits barely above the middle of the distribution. An agent twenty
+  // minutes in had already passed it and the row flipped to "past the usual"
+  // while fourteen minutes of ordinary runway remained. The operator saw that as
+  // the estimate simply never appearing, which it effectively never did.
+  //
+  // The median anchors the optimistic end and the slowest RETURNED agent the
+  // pessimistic one, so the range stays a range for as long as the sample can
+  // still explain what is happening.
+  const at = (q) => done[Math.min(done.length - 1, Math.floor(done.length * q))];
+  const median = at(0.5);
+  const slowest = done[done.length - 1];
+
   const oldest = Math.max(...live.map((a) => {
     const t = Date.parse(a.started);
     return Number.isFinite(t) ? now - t : 0;
   }));
-  // OVERRUN. When the one that has been out longest has already run past the
-  // top of the range, the returned agents no longer predict it — it is an
-  // outlier and the sample says nothing about how much it has left.
-  //
-  // Clamping at zero instead produced "<1m–<1m left" beside an agent showing
-  // +19m, which is the estimator asserting confidence it does not have, about
-  // the exact case where it has least. The operator caught it on the board.
-  // What is reported instead is the fact that IS known: how far past the usual
-  // span it has gone.
-  const high = mean + sd - oldest;
-  if (high <= 0) return { over: oldest - mean, usual: mean };
-  const point = Math.max(0, mean - oldest);
-  const low = Math.max(0, mean - sd - oldest);
-  return { point: sd === 0 ? point : null, low, high };
+
+  // Past the SLOWEST that ever returned: nothing in the sample took this long,
+  // which is a real statement about the sample rather than a countdown to zero.
+  if (oldest >= slowest) return { over: oldest - median, usual: median };
+
+  const low = Math.max(0, median - oldest);
+  const high = Math.max(0, slowest - oldest);
+  return { point: low === high ? low : null, low, high };
 }
 
 /** How long the run has been going, from its own `started` stamp. */

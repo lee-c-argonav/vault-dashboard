@@ -263,3 +263,25 @@ test('an overrun moves the digest, so the phone learns about it', () => {
     ? { ...a, started: new Date(NOW - 60 * 60_000).toISOString() } : a));
   assert.notEqual(boardDigest(normal, NOW), boardDigest(overrun, NOW));
 });
+
+// The operator reported never seeing a time estimate. Cause: agent runtimes are
+// heavy-tailed (64 returned agents, mean 8m, max 34m), and the old estimator used
+// mean+sd, which an agent passes early — so the row flipped to "past the usual"
+// while ordinary runway remained, on almost every real fan-out.
+test('a heavy tail still yields a forward estimate, not an overrun', () => {
+  const b = fanoutBoard();
+  const mins = (n) => new Date(NOW - n * 60_000).toISOString();
+  // Mostly quick, one long: mean well below the slowest, as on the real machine.
+  const spans = [5, 5, 6, 6, 7, 34];
+  b.unpublished[0].agents = [
+    ...spans.map((d, i) => ({
+      id: `d${i}`, state: 'done', label: 'x',
+      started: mins(90), movedAt: mins(90 - d),
+    })),
+    // Twenty minutes in: past the mean, nowhere near the slowest that returned.
+    { id: 'o', state: 'running', label: 'x', started: mins(20) },
+  ];
+  const s = toPublicBoard(b, NOW).unpublished[0];
+  assert.equal(s.etaOver, false, 'called an ordinary agent an overrun');
+  assert.ok(s.etaMins > 0, 'no forward estimate was published');
+});
