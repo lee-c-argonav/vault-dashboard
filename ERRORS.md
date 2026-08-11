@@ -201,3 +201,17 @@ the suite was green or red for reasons that had nothing to do with the code.
 on recency, pin that case to `Date.now()` rather than the shared counter.
 **Remember:** A synthetic clock and a real filesystem is a mixed measurement.
 Anchor them together or the test measures the harness.
+
+## 2026-08-11 — Reopening a browser after an MCP-driven page was closed
+**What didn't work:** Four attempts. `new_page` returned "The browser is already
+running for .../chrome-profile"; killing the instance pid left nine node
+processes and the error unchanged; `pkill` on the profile pattern reported the
+same nine; passing an isolated context returned the identical error, because the
+lock is on the user-data-dir and not on the context.
+**What did:** Kill the Chrome process holding the profile, then remove the
+`Singleton*` lock files in the user-data-dir, then reopen. The nine survivors
+were MCP *server* processes, not browsers, so counting them was reading the wrong
+signal for three of the four attempts.
+**Remember:** A profile lock is a file, not a process. Killing processes named
+after the profile is not the same as releasing it, and a process count that does
+not drop is evidence you are counting the wrong thing.
