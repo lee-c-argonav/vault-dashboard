@@ -107,15 +107,28 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
  * the privacy set are the same cut" a property of one function instead of a
  * claim in prose.
  *
+ * SCOPE, decided 2026-08-11. RUN-AUTHORED TEXT IS DELIBERATELY PUBLISHED — the
+ * goal, the note, the unit labels, the question waiting on the operator and the
+ * run's `project`. The operator writes those and already controls what they say,
+ * and the page is not worth opening without them. They do name products, and
+ * that was weighed and accepted rather than overlooked.
+ *
+ * Everything OBSERVED about a session is dropped, because nobody chose its
+ * wording. That asymmetry is the whole rule: published text is authored, and
+ * authored text has a person behind it who decided.
+ *
  * WHAT IS DELIBERATELY DROPPED, and it is more than the obvious:
- *   - `where` and `project`. A relative path is still a path, and one live value
- *     on this machine is a directory named after a confidential project
- *     codename, which was being published under the previous behaviour.
+ *   - A session's `where` and `project`. A relative path is still a path, and one
+ *     live value on this machine is a directory named after a confidential
+ *     project codename. (A RUN's `project` is published; see SCOPE above.)
  *   - `branch`. Branch names carry codenames and ticket ids.
  *   - `lastTool`, and every tool name. Cheap to leak, no value on a phone.
  *   - `name`. Derived from the directory, so it leaks the same thing `where`
  *     does, one step removed.
- *   - `tty`, `pid`. Machine-local and useless remotely.
+ *   - `tty`, `pid`. Machine-local and useless remotely. Dropped from the object,
+ *     not merely left unrendered: this doctrine is "the page cannot render what
+ *     it never holds", and a field the projection carries is one a template can
+ *     pick up tomorrow.
  *   - Sub-agent labels. The sidecar description is human-written and routinely
  *     names files, findings and people.
  *
@@ -170,7 +183,6 @@ export function toPublicBoard(board, now) {
     machine: r.machine,
     state: r.state,
     note: r.note,
-    tty: r.tty,
     started: r.started,
     updated: r.updated,
     wrote: r.wrote,
@@ -503,8 +515,15 @@ footer{margin-top:30px;font:11px/1.5 var(--mono);color:var(--dim);
    same thing as one nobody has heard from, and the bare row said the second
    about both. */
 .sctx{margin:4px 0 0 14px;font:12px/1.4 var(--sans);color:var(--text-3);overflow-wrap:anywhere}
-.sl{flex:1 1 auto;min-width:0;font:12px/1.4 var(--mono);color:var(--text-3);
+/* The headline, and the row's one bright thing — the same skeleton the desktop
+   session row uses, so both surfaces scan headline-first. The projection allows
+   no name or title here, so the ordinal is the headline. */
+.sl{flex:1 1 auto;min-width:0;font:14px/1.4 var(--sans);color:var(--bone);
     overflow-wrap:anywhere}
+/* Uptime, fan-out, silence: how the session is doing, one step down, indented
+   past the dot exactly as the desktop's identity line is. */
+.smeta{margin:4px 0 0 14px;font:11px/1.4 var(--mono);font-variant-numeric:tabular-nums;
+       color:var(--text-3);overflow-wrap:anywhere}
 .stag{flex:0 0 auto;font:9px/1 var(--mono);letter-spacing:.12em;color:var(--dim);
       border:1px solid var(--rule-hot);padding:3px 5px;white-space:nowrap}
 
@@ -629,19 +648,25 @@ function sessionSection(sessions, now) {
   const rows = sessions.map((s, i) => {
     const t = Date.parse(s.since);
     const up = Number.isFinite(t) ? humanMs(Math.max(0, now - t)) : '--';
-    const bits = [`session ${String(i + 1).padStart(2, '0')}`, up];
+    // The desktop's session skeleton — headline, identity, context, each slot
+    // collapsing when empty — holding only what the projection allows. The
+    // headline is the ordinal, because it is the only identity toPublicBoard
+    // lets through; everything that says how the session is doing steps down to
+    // the identity line, so the row scans headline-first like every other row.
+    const bits = [up];
     if (s.agentsOut) bits.push(`${s.agentsOut} of ${s.agentsTotal} sub-agents still running`);
     else if (s.agentsTotal) bits.push(`${s.agentsTotal} sub-agents, all returned`);
     // Bucketed at five minutes by the projection, so the phrase is honest about
     // its own resolution rather than implying a precision it does not have.
     if (s.silentBucket) bits.push(`silent ${s.silentBucket * 5}m+`);
     return `<div class="sess is-${esc(s.status || 'unknown')}"><div class="sess-head"><i class="dot"></i>`
-      + `<span class="sl">${esc(bits.join(' · '))}</span>`
+      + `<span class="sl">session ${String(i + 1).padStart(2, '0')}</span>`
       // The observed status when there is one. Falling back to IDLE rather than
       // NO STATUS when a session has context is the older rule and still right:
       // the two say different things, one being a session nobody has heard from
       // and the other a session between pieces of work.
       + `<span class="stag">${esc((s.status || (s.context ? 'idle' : 'no status')).toUpperCase())}</span></div>`
+      + `<div class="smeta">${esc(bits.join(' · '))}</div>`
       + (s.context ? `<div class="sctx">${esc(s.context)}</div>` : '')
       + `</div>`;
   }).join('');

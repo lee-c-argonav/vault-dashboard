@@ -100,6 +100,13 @@ const isBlocked = (u) => u.state === 'blocked';
 const isFailed = (u) => u.state === 'failed';
 
 export function runState(run) {
+  // Guarded here rather than at one call site. loadModel wrapped this in a
+  // try/catch with a comment claiming the panel was protected; it protected one
+  // of six call sites, and the other five reach it unguarded from renderRuns,
+  // which has no catch above it — so one half-shaped run for one tick would take
+  // down the whole window and every refresh after it.
+  if (!run || !Array.isArray(run.units) || !Array.isArray(run.needsInput)
+      || !Array.isArray(run.blockers)) return 'running';
   if (run.state === 'done' || run.state === 'paused') return run.state;
   if (run.needsInput.length) return 'needs-input';
   if (run.blockers.length) return 'blocked';
@@ -379,9 +386,10 @@ export function sessionActivity(s) {
   // counting it as done reported "01 AGENTS DONE" about an agent two seconds old.
   const OUT = new Set(['running', 'stalled', 'open']);
   const out = (s.agents ?? []).filter((a) => OUT.has(a.state));
-  const total = (s.agents ?? []).length;
-  if (out.length) bits.push(`${out.length} OF ${total} SUB-AGENTS STILL RUNNING`);
-  else if (total) bits.push(`${total} SUB-AGENTS, ALL RETURNED`);
+  // No fan-out clause here. The block below this line names the agents and states
+  // the split, so putting the same counts in the activity line said it twice in
+  // consecutive lines. This carries only what that block cannot: silence, the
+  // last tool, and the branch.
   if (s.agentsCapped) bits.push(`+${s.agentsCapped} MORE`);
   if (s.lastTool) bits.push(`LAST ${s.lastTool.replace(/^mcp__[^_]+__/, '')}`);
   if (s.branch) bits.push(s.branch);
@@ -533,13 +541,42 @@ export function etaText(e) {
  * spread model does not care what produced the samples. A returned agent's end
  * is its file's last write, which is the same clock its start comes from.
  */
-export function agentEta(agents) {
-  return eta((agents ?? []).map((a) => ({
-    id: a.id,
-    state: a.state === 'done' ? 'done' : 'running',
-    started: a.started,
-    ended: a.state === 'done' ? a.movedAt : null,
-  })));
+export function agentEta(agents, now = Date.now()) {
+  const list = agents ?? [];
+  // `eta` models a QUEUE: its estimate is `mean × remaining`, which is right for
+  // units that run one after another. Sub-agents run at the same time, so that
+  // multiplier overstated by 3x to 10x — measured against ten real fan-outs, a
+  // 44-agent session with 5 out read "27m-1h13m left" against a true 7m, and the
+  // error grows with the number out, so it was worst exactly when an estimate
+  // matters. What is left on a parallel batch is what the slowest straggler has
+  // still to run, not the sum of all of them.
+  //
+  // STALLED AGENTS ARE EXCLUDED. transcripts.js defines stalled as one abandoned
+  // when its parent died and calls counting it as running "the defect this module
+  // exists to remove"; feeding it here reintroduced that in another column, so a
+  // fan-out with one agent stalled 90m advertised "~7m left".
+  const done = list.filter((a) => a.state === 'done' && a.started && a.movedAt)
+    .map((a) => Date.parse(a.movedAt) - Date.parse(a.started))
+    .filter((ms) => Number.isFinite(ms) && ms > 0);
+  if (done.length < MIN_SAMPLES) return null;
+
+  const live = list.filter((a) => a.state === 'running' || a.state === 'open');
+  if (!live.length) return null;
+
+  const mean = done.reduce((a, b) => a + b, 0) / done.length;
+  const variance = done.reduce((a, b) => a + (b - mean) ** 2, 0) / done.length;
+  const sd = Math.sqrt(variance);
+  // How long the one that has been out longest still has, on the mean. Elapsed
+  // is subtracted because a running agent has already served part of its time —
+  // `eta` ignores that, which a queue can absorb and a batch cannot.
+  const oldest = Math.max(...live.map((a) => {
+    const t = Date.parse(a.started);
+    return Number.isFinite(t) ? now - t : 0;
+  }));
+  const point = Math.max(0, mean - oldest);
+  const low = Math.max(0, mean - sd - oldest);
+  const high = Math.max(0, mean + sd - oldest);
+  return { point: sd === 0 ? point : null, low, high };
 }
 
 /** How long the run has been going, from its own `started` stamp. */

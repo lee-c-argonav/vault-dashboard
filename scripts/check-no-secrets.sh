@@ -143,9 +143,33 @@ scan_msgs() { # $1 = human label, $2 = extended-regex
 # a name keeps this committed script free of the identifiers it guards.
 # Residual: a display name paired with a noreply address is not pattern-scanned.
 NOREPLY='@users\.noreply\.github\.com>'
+
+# Identities that are ALREADY on the public remote and have been accepted as
+# such. One literal identity per line, blank lines and # comments ignored.
+#
+# Gitignored, like .confidential-patterns and for the same reason: an exemption
+# names the very identifier the script exists to keep out of itself. Without
+# this, a repo whose early history predates its own gate reports the same
+# finding on every standalone run forever, and a control that always fails is
+# one its operator learns to skip — which is the failure the 2026-08-11 repair
+# was for. Rewriting history is still the real fix; this records that the choice
+# was made rather than forgotten.
+EXEMPT_IDENTITIES='.confidential-identity-exempt'
+identity_exempt() {
+  if [ -f "$EXEMPT_IDENTITIES" ]; then
+    grep -vE '^\s*(#|$)' "$EXEMPT_IDENTITIES" | grep -Fvxf /dev/null - 2>/dev/null || true
+  fi
+}
+
 scan_identity() { # $1 = human label, $2 = extended-regex
-  local hits
+  local hits exempt
+  exempt=$(identity_exempt)
   hits=$(identities | grep -vE "$NOREPLY" | grep -IiE "$2" | grep -vE "$ALLOW")
+  # Drop any identity listed as already-public and accepted.
+  if [ -n "$exempt" ]; then
+    hits=$(printf '%s\n' "$hits" | grep -Fvxf <(printf '%s\n' "$exempt") || true)
+  fi
+  hits=$(printf '%s' "$hits" | grep -v '^$' || true)
   if [ -n "$hits" ]; then
     report "$1 — in the COMMIT AUTHOR/COMMITTER identity of a commit being pushed"
     printf '%s\n' "$hits" | sed 's/^/      /'

@@ -78,6 +78,54 @@ for icon in apple-touch-icon.png favicon-32.png icon-192.png icon-512.png icon-m
   cp "$HERE/../public/$icon" "$HERE/public/$icon" || exit 1
 done
 
+# Publish-time confidentiality scan. There was no check of any kind between the
+# build and the upload: the pre-push gate reads the git tree, and this page is
+# never committed, so nothing had ever looked at the bytes actually served.
+#
+# RUN-AUTHORED TEXT IS EXEMPT by the 2026-08-11 decision — the goal, the note,
+# unit labels, the ask and the run's project are deliberately published, and the
+# operator writes them. Those regions are stripped before the scan, so what is
+# checked is everything ELSE: session lines, the legend, the footer, history.
+# That is where a new leak would appear, and it is the class this cannot catch by
+# reading the source, because the source is a template and the leak is a value.
+#
+# The stripped list is longer than the obvious three because the same authored
+# text reaches the page through several elements: the goal appears in the run
+# heading, again in a session's goal-recall line, and again in history. The first
+# run of this scan found the last two, which is the gate working.
+patterns="$HERE/../.confidential-patterns"
+if [ -f "$patterns" ]; then
+  scrubbed=$(sed -E \
+    -e 's#<h2>[^<]*</h2>##g' \
+    -e 's#<p class="note">[^<]*</p>##g' \
+    -e 's#<p class="ask[^"]*">[^<]*</p>##g' \
+    -e 's#<span class="hsub">[^<]*</span>##g' \
+    -e 's#<p class="repo">[^<]*</p>##g' \
+    -e 's#<span class="ul">[^<]*</span>##g' \
+    -e 's#<span class="uid">[^<]*</span>##g' \
+    -e 's#<div class="sctx">[^<]*</div>##g' \
+    -e 's#<span class="hg">[^<]*</span>##g' \
+    "$HERE/public/index.html")
+  bad=0
+  while IFS= read -r pat; do
+    case "$pat" in ''|\#*) continue ;; esac
+    # /usr/bin/grep, never git grep: git's ERE silently ignores \b and four of
+    # these patterns are written with it. Same repair as 2026-08-11.
+    if printf '%s' "$scrubbed" | /usr/bin/grep -qIiE "$pat"; then
+      echo "  confidential pattern in the built page: /$pat/" >&2
+      printf '%s' "$scrubbed" | /usr/bin/grep -oIiE "$pat" | sort -u | head -3 | sed 's/^/      /' >&2
+      bad=1
+    fi
+  done < "$patterns"
+  if [ "$bad" -ne 0 ]; then
+    echo "publish BLOCKED — the page carries confidential content outside run-authored text" >&2
+    exit 1
+  fi
+  echo "  publish scan clean (run-authored text exempt by decision)"
+else
+  echo "  no .confidential-patterns; publish scan skipped" >&2
+fi
+
 cd "$HERE" || exit 1
 out=$(vercel deploy --prod --yes --scope "$VERCEL_SCOPE" 2>&1)
 status=$?

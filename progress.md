@@ -78,6 +78,3 @@ Every one of these was found by the operator reading a row, none by the suite.
 
 ## Scope note
 
-Done from a vault session, which the vault contract otherwise forbids for code
-repos. The operator asked for the repair directly, which is the instruction that
-overrides the default. Recorded rather than assumed.

@@ -172,7 +172,13 @@ function renderFocus(state) {
     const seg = el('i', `seg is-${t.cls}`);
     // Percent of CAPACITY, so the bar's empty tail is real headroom rather than
     // a normalisation that always fills.
-    seg.style.width = `${Math.min(100, (100 * t.points) / load.capacity)}%`;
+    // Normalised by whichever is larger, the score or the capacity. Against
+    // capacity alone the widths summed past 100% the moment load exceeded it —
+    // measured at 337% on a saturated board — and with flex:0 0 auto and
+    // overflow:hidden the first segment filled the track and every other segment
+    // was clipped out of existence. A solid bar and the number 100 is precisely
+    // the uncomposed total this gauge was built to replace.
+    seg.style.width = `${(100 * t.points) / Math.max(load.score, load.capacity)}%`;
     seg.title = `${t.label}: ${t.count} × ${t.weight} = ${t.points.toFixed(2)} of ${load.capacity}`;
     return seg;
   }));
@@ -452,32 +458,46 @@ function sessionRow(s, now) {
   // session last published — the moment there was any observed activity to show,
   // which is exactly when a session is most worth reading about.
   const sub = [activity, s.context].filter(Boolean).join('  ·  ');
-  // The session's own description leads, in the same weight a run's goal gets,
-  // because that is the line you read to know what a row is about. A session
-  // writes it itself and rewrites it as the work moves, so it cannot go stale
-  // the way a hand-written label would. Suppressed when it merely repeats the
-  // name, which happens when the session was renamed by hand.
-  const title = s.title && s.title !== s.name ? s.title : '';
-  const row = el('div', `sess is-${s.status || 'unknown'}${sub ? ' has-ctx' : ''}${title ? ' has-title' : ''}`);
+  // ONE skeleton whatever the session carries: headline, identity, activity,
+  // fan-out, with an empty slot collapsing rather than promoting another field
+  // into its place. This replaced two shapes in one column — a titled session
+  // led with a bright description and a second line, an untitled one led with a
+  // dim mono path and no second line — so the eye could not scan the list.
+  //
+  // The headline is the best available answer to "about what". The session's
+  // own title first: it is rewritten as the work moves, so it cannot go stale.
+  // With no title the NAME leads, not `context`: context recalls a run that
+  // already finished, so promoting it would put stopped work in the row's one
+  // bright slot, and it is empty for most live sessions, which would make the
+  // next fallback the common case anyway. The name always exists for a session
+  // whose transcript is readable, is stable for the session's life, and is the
+  // word the operator uses to find the terminal. A title that merely repeats
+  // the name (a hand-renamed session) falls through to the same string.
+  const headline = s.title || s.name || s.where || s.project || `pid ${s.pid}`;
+  const t = Date.parse(s.since);
+  const up = Number.isFinite(t) ? humanMs(Math.max(0, now - t)) : '--';
+  // The identity line answers "which session · where · how long", and drops only
+  // a part the headline already said, so the slot collapses content without
+  // changing the row's shape. Every part is in the render signature: name and
+  // where directly, uptime through sessionText, which prints the same humanMs.
+  const meta = [s.name, s.where || s.project, up]
+    .filter((part) => part && part !== headline).join(' · ');
+  const row = el('div', `sess is-${s.status || 'unknown'}`);
   const head = el('div', 'sess-head');
   head.append(el('i', 'sess-dot'));
 
-  // With a description, the name and location drop to a second line: they answer
-  // "which session", and the description answers "about what", which is the
-  // question a glance is asking.
-  const where = s.name ? `${s.name} · ${sessionText(s, now)}` : sessionText(s, now);
-  const label = el('span', title ? 'sess-title' : 'sess-label', title || where);
-  label.title = title ? `${title}\n${where}` : `${s.where || s.project} · pid ${s.pid} · ${s.tty}`;
+  const label = el('span', 'sess-title', headline);
+  label.title = meta ? `${headline}\n${meta}` : headline;
   head.append(label);
   // The process's own answer where there is one. NO STATUS is now reserved for
   // a session that could not be joined at all — a Kimi session, or one whose
   // files are unreadable — rather than being the default for everything.
   head.append(el('span', 'sess-tag', (s.status || (s.context ? 'idle' : 'no status')).toUpperCase()));
   row.append(head);
-  if (title) {
-    const meta = el('div', 'sess-where', where);
-    meta.title = `${s.where || s.project} · pid ${s.pid} · ${s.tty}`;
-    row.append(meta);
+  if (meta) {
+    const where = el('div', 'sess-where', meta);
+    where.title = `${s.where || s.project} · pid ${s.pid} · ${s.tty}`;
+    row.append(where);
   }
   if (sub) {
     const ctx = el('div', 'sess-ctx', sub);
@@ -544,14 +564,17 @@ function agentList(agents, capped, now) {
   const total = agents.length + capped;
   head.append(el('span', 'run-agents-k',
     `${total} SUB-AGENT${total === 1 ? '' : 'S'}`));
+  // "ALL n RETURNED" is stated against the TOTAL, never against the read subset.
+  // With a cap in play the two differ, and "70 SUB-AGENTS · ALL 64 RETURNED" is
+  // the same which-number-is-the-total confusion this wording was written to fix.
   head.append(el('span', 'run-agents-split',
     out.length
       ? `${out.length} STILL RUNNING · ${done} RETURNED`
-      : `ALL ${done} RETURNED`));
-  if (capped) head.append(el('span', 'run-agents-note', `${capped} NOT SHOWN`));
+      : (capped ? `${done} OF ${total} RETURNED` : `ALL ${done} RETURNED`)));
+  if (capped) head.append(el('span', 'run-agents-note', `${capped} NOT READ`));
 
   // Time left on the fan-out, estimated from the ones that already came back.
-  const e = out.length ? agentEta(agents) : null;
+  const e = out.length ? agentEta(agents, now) : null;
   if (e) head.append(el('span', 'run-agents-eta', etaText(e)));
   wrap.append(head);
 

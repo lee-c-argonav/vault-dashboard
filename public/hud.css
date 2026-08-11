@@ -895,13 +895,13 @@ body {
 
 /* ── sessions with no run file ───────────────────────────────────────────── */
 
-/* A live agent session that publishes nothing. Deliberately the quietest row on
-   the panel: it carries one fact, that something is running here and not
-   reporting. Anything louder would compete with a run that has a real question
+/* A live agent session that publishes nothing. Deliberately quieter than a run
+   row: anything louder would compete with a run that has a real question
    waiting on you, and that ranking is the whole point of the board.
 
-   The dot is --dimmer rather than any state colour, because "not reporting" is
-   an absence of state, not a fifth one. */
+   One skeleton for every session — headline, identity, activity, fan-out —
+   with empty slots collapsing; the fallback chain is in sessionRow (app.js).
+   The dot's state colour and circle shape come from tokens.css. */
 /* Taller than it was. The row carries a name, a location, an uptime, a state, an
    activity line, what it last published, and now every sub-agent still out —
    7px of padding was sized for a row that said a path and an uptime. */
@@ -938,10 +938,12 @@ body {
   width: 5px; height: 5px;
   align-self: center;
 }
-/* The session's own description, in the weight a run's goal gets. This is the
-   line the eye lands on, so it is the only bright thing in a session row: the
-   row previously led with a name and a path, which answer "which session" and
-   never "about what". */
+/* EVERY session's headline, title or not — the fallback chain lives in
+   sessionRow. The row's one bright thing, so the list scans as one column of
+   headlines; there used to be a second shape (.sess-label) that led with a dim
+   mono path when the session had no title, and the column changed structure row
+   to row. Same weight family as a run's goal, one step smaller, because a run
+   row outranks a session row on this panel by design. */
 .sess-title {
   flex: 1 1 auto;
   min-width: 0;
@@ -951,20 +953,11 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Which session, demoted under what it is about. */
+/* Which session, where, how long — always the second line, demoted under what
+   the session is about. Collapses a part only when the headline already said it. */
 .sess-where {
   margin: 2px 0 0 14px;
   font: 11px/1.4 var(--mono);
-  color: var(--text-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sess-label {
-  flex: 1 1 auto;
-  min-width: 0;
-  font: 12px/1.4 var(--mono);
   color: var(--text-3);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -985,8 +978,10 @@ body {
   padding: 3px 5px;
 }
 .sess[data-clickable] { cursor: pointer; }
+/* The headline is the row's only bright element, so it carries the hover
+   cue. The old rule named .sess-label, which no session renders any more. */
+.sess[data-clickable]:hover .sess-title { color: var(--orange); }
 .sess[data-clickable]:hover { background: var(--panel-2); }
-.sess[data-clickable]:hover .sess-label { color: var(--dim); }
 /* The run rows' vocabulary exactly, not a second one: dashed while in flight,
    orange confirms, amber misses. A session row and a run row do the same thing
    on click, so they must answer in the same language. */
