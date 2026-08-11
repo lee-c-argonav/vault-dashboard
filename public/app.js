@@ -474,6 +474,14 @@ function sessionRow(s, now) {
     ctx.title = sub;
     row.append(ctx);
   }
+  // The sub-agents themselves, not just a count of them. A session fanning out to
+  // eight agents and one fanning out to none said the same thing on this row —
+  // a number — while the run row beside it named every agent still out. They are
+  // the same object at different detail levels, so they get the same detail.
+  if ((s.agents ?? []).length) {
+    row.append(agentList(s.agents, s.agentsCapped ?? 0, now));
+  }
+
   row.dataset.sessionPid = String(s.pid);
   row.dataset.clickable = '';
   row.title = `Open this session's terminal (${s.tty})`;
@@ -520,13 +528,30 @@ function agentList(agents, capped, now) {
     `${pad2(out.length)} OUT · ${pad2(done)} BACK${capped ? ` · +${capped} MORE` : ''}`));
   wrap.append(head);
 
-  for (const a of out) {
+  // When nothing is out, name the most recent returns instead of showing a bare
+  // count. A session whose 35 agents have all come back has just done 35 things,
+  // and "00 OUT · 35 BACK" says none of them. Three is enough to say what the
+  // work was without turning a row into a list.
+  const RECENT = 3;
+  const shown = out.length
+    ? out
+    : agents.slice()
+      .sort((a, b) => String(b.movedAt ?? '').localeCompare(String(a.movedAt ?? '')))
+      .slice(0, RECENT);
+  if (!out.length && shown.length) {
+    head.append(el('span', 'run-agents-recent', `LAST ${Math.min(RECENT, shown.length)}`));
+  }
+
+  for (const a of shown) {
     const sub = el('div', `run-a is-${a.state === 'open' ? 'running' : a.state}`);
     sub.append(el('i', 'run-a-dot'));
     const label = el('span', 'run-a-label', a.label || a.agentType || a.id);
     label.title = `${a.label || a.id}${a.depth > 1 ? ` · nested, depth ${a.depth}` : ''}`;
     sub.append(label);
-    const d = durationOf({ state: 'running', started: a.started }, now, null);
+    // A returned agent gets its measured span, not a clock still counting up.
+    const d = a.state === 'done'
+      ? durationOf({ state: 'done', started: a.started, ended: a.movedAt }, now, null)
+      : durationOf({ state: 'running', started: a.started }, now, null);
     const t = el('span', d.cls, d.text);
     if (a.state === 'stalled') t.title = 'Open, but its transcript has not moved in over ten minutes';
     sub.append(t);
@@ -573,7 +598,10 @@ function renderRuns(runs, sessions = []) {
     ...sessions.map((s) => [
       s.pid, s.tty, s.where, sessionText(s, now), s.status ?? '', s.name ?? '',
       s.lastTool ?? '', s.branch ?? '', s.agentsCapped ?? 0, s.context ?? '',
-      (s.agents ?? []).map((a) => `${a.id}${a.state}`).join(','),
+      // Labels and starts too, now that the row renders them by name rather than
+      // counting them. A field the row shows and the signature omits renders once
+      // and then never changes again.
+      (s.agents ?? []).map((a) => `${a.id}${a.state}${a.label ?? ''}${a.started ?? ''}`).join(','),
       s.movedAt ? Math.floor(Date.parse(s.movedAt) / 30_000) : '',
     ].join('\x01')),
   ].join('\n');

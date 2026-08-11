@@ -707,11 +707,14 @@ body {
    still render above when a run file carries them. */
 .run-agents { margin-top: 9px; }
 .run-agents-head {
+  display: flex;
+  gap: 10px;
   padding: 3px 0 3px 81px;
   font: 10px/1.4 var(--mono);
   letter-spacing: .1em;
   color: var(--text-3);
 }
+.run-agents-recent { color: var(--dimmer); }
 
 /* Overflow markers at either end of the window, so a hidden unit is visible as
    a count rather than silently absent. */
@@ -894,10 +897,18 @@ body {
 
    The dot is --dimmer rather than any state colour, because "not reporting" is
    an absence of state, not a fifth one. */
+/* Taller than it was. The row carries a name, a location, an uptime, a state, an
+   activity line, what it last published, and now every sub-agent still out —
+   7px of padding was sized for a row that said a path and an uptime. */
 .sess {
-  padding: 7px 16px;
+  padding: 11px 16px 12px;
   border-bottom: 1px solid var(--rule);
 }
+/* The nested fan-out sits under the session's own text, not under the 81px
+   indent a unit row uses, because there is no unit column here to clear. */
+.sess .run-agents { margin-top: 7px; }
+.sess .run-agents-head { padding-left: 14px; }
+.sess .run-a { padding-left: 14px; grid-template-columns: 4px minmax(0, 1fr) 82px; }
 .sess:last-child { border-bottom: 0; }
 .sess-head {
   display: flex;
