@@ -686,7 +686,53 @@ function agentList(agents, capped, now) {
       `${Math.min(RECENT, shown.length)} MOST RECENT SHOWN`));
   }
 
+  // GROUPED BY WORKFLOW. A workflow's agents share one name and have no other —
+  // their sidecar carries no description, so fourteen of them rendered fourteen
+  // identical rows reading `audio-route-and-oss`, which is a list that says one
+  // thing fourteen times. One row per workflow says more in a fourteenth of the
+  // space: how many are running, and how long the oldest has been at it.
+  //
+  // Directly dispatched agents are NOT grouped. Each carries its own written
+  // description, so each row is a different fact.
+  const groups = [];
+  const byWorkflow = new Map();
   for (const a of shown) {
+    if (!a.workflow) { groups.push({ one: a }); continue; }
+    if (!byWorkflow.has(a.workflow)) {
+      const g = { workflow: a.workflow, label: a.label, members: [] };
+      byWorkflow.set(a.workflow, g);
+      groups.push(g);
+    }
+    byWorkflow.get(a.workflow).members.push(a);
+  }
+
+  for (const g of groups) {
+    if (!g.one && g.members.length > 1) {
+      // The group's own state is its worst: one stalled member is the fact worth
+      // surfacing, and a row that reads `running` while a member is stuck hides
+      // exactly what the operator is scanning for.
+      const state = g.members.some((m) => m.state === 'stalled') ? 'stalled' : 'running';
+      const row = el('div', `run-a is-group is-${state}`);
+      row.append(el('i', 'run-a-dot'));
+      const label = el('span', 'run-a-label', g.label || g.workflow);
+      const stalled = g.members.filter((m) => m.state === 'stalled').length;
+      const n = el('span', 'run-a-count',
+        `×${g.members.length}${stalled ? ` · ${stalled} STALLED` : ''}`);
+      label.title = `${g.members.length} agents in this workflow`
+        + (stalled ? `, ${stalled} of them stalled` : '');
+      row.append(label, n);
+      // The OLDEST member's elapsed, because a batch is finished when its
+      // slowest member is, and that is the number the operator is waiting on.
+      const oldest = g.members.reduce((a, b) =>
+        (String(a.started ?? '') <= String(b.started ?? '') ? a : b));
+      const d = durationOf({ state: 'running', started: oldest.started }, now, null);
+      const t = el('span', d.cls, d.text);
+      t.title = 'The longest-running agent in this workflow';
+      row.append(t);
+      wrap.append(row);
+      continue;
+    }
+    const a = g.one ?? g.members[0];
     const sub = el('div', `run-a is-${a.state === 'open' ? 'running' : a.state}`);
     sub.append(el('i', 'run-a-dot'));
     const label = el('span', 'run-a-label', a.label || a.agentType || a.id);

@@ -56,6 +56,22 @@ const EXEC_TIMEOUT_MS = 1500;
 const HOT_CPU_PCT = 80;
 const HOT_RSS_BYTES = 4 * 1024 ** 3;
 
+/**
+ * The other reason to name a process: the MACHINE is busy, whoever is doing it.
+ *
+ * HOT_CPU_PCT above is percent of ONE core, the ps/top convention, so it fires
+ * only when a single process is individually hot. Eight processes at 20% of a
+ * core each is a machine at ~160% with nothing crossing 80, and the slot stayed
+ * dark — which is the case the operator was asking about when they said "if the
+ * CPU is above 30% I want the app that uses it the most".
+ *
+ * BUSY_CPU_PCT is percent of the WHOLE machine, the same quantity the CPU cell
+ * renders, so the trigger and the number it explains are finally the same
+ * measurement. Above it the top process is named whether or not it is hot on its
+ * own, because at that point "who is doing this" is the question.
+ */
+const BUSY_CPU_PCT = 30;
+
 const BATTERY_WARM_C = 40;
 
 /** Run a command with no shell, resolving to '' on any failure. */
@@ -375,7 +391,14 @@ async function sampleProcesses() {
   } else if (memHot) {
     hot = { name: topMem.name, kind: 'mem', cpuPct: null, rssBytes: topMem.rssBytes };
   }
-  return { hot, count: rows.length };
+  // `top` is returned whether or not it crossed HOT_CPU_PCT, because the OTHER
+  // trigger — the machine as a whole being busy — is not knowable here. This
+  // function samples the process table; the machine's CPU comes from tick deltas
+  // in the loop below. The decision is made where both are in hand.
+  const top = topCpu
+    ? { name: topCpu.name, kind: 'cpu', cpuPct: topCpu.cpuPct, rssBytes: topCpu.rssBytes }
+    : null;
+  return { hot, top, count: rows.length };
 }
 
 // ── Sampling loop ─────────────────────────────────────────────────────────────
@@ -413,7 +436,21 @@ async function sample() {
   if (inFlight) return; // a wedged sampler must not stack up work
   inFlight = true;
   try {
-    const doProcs = forceAll || tick % PROC_EVERY === 0;
+    // CPU FIRST, because it decides whether the process table is worth reading
+    // this tick. It is free — tick deltas from os.cpus(), no subprocess.
+    const cpu = cpuPercent();
+
+    // Demand-driven. The process table is normally read every 3rd tick, and at a
+    // 10s base that is a 30-second answer to "who is eating the machine" — long
+    // enough that a spike can be over before it is attributed, which is what
+    // happened in testing: 97% CPU and an empty slot, because no process sample
+    // fell inside the busy window.
+    //
+    // A busy machine forces the sample on the tick that noticed. The extra cost
+    // is one `ps` (~15ms) and only while CPU is already above BUSY_CPU_PCT, so
+    // it buys the answer exactly when it is wanted and costs nothing when idle.
+    const busy = cpu !== null && cpu >= BUSY_CPU_PCT;
+    const doProcs = forceAll || busy || tick % PROC_EVERY === 0;
     const doSlow = forceAll || tick % SLOW_EVERY === 0;
     tick++;
 
@@ -430,12 +467,18 @@ async function sample() {
       at: new Date().toISOString(),
       intervalMs: BASE_MS,
       cores: os.cpus().length,
-      cpu: cpuPercent(),
+      cpu,
       gpu,
       memory,
       battery: battery === undefined ? latest.battery : battery,
       thermal: thermal === undefined ? latest.thermal : thermal,
-      hot: procs === undefined ? latest.hot : (procs?.hot ?? null),
+      // Two ways to earn the slot. A process hot on its own (HOT_CPU_PCT, one
+      // core), or the machine busy at all (BUSY_CPU_PCT, whole machine) — in
+      // which case the top process is named even though nothing is individually
+      // hot, which is the eight-processes-at-20% case the first rule misses.
+      hot: procs === undefined
+        ? latest.hot
+        : (procs?.hot ?? (busy ? (procs?.top ?? null) : null)),
       gpuHot: gpuHot === undefined ? latest.gpuHot : gpuHot,
       warnings: []
     };
