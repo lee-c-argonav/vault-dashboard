@@ -329,6 +329,27 @@ function lastTool(entries) {
   return '';
 }
 
+/**
+ * The session's own one-line description of itself.
+ *
+ * Claude Code writes an `ai-title` entry and rewrites it as the work moves —
+ * 50 of them in one live transcript. It is the only thing on disk that answers
+ * "what is this session about" in a sentence, and it is written BY the session,
+ * so it costs nothing and cannot go stale the way a hand-written label would.
+ *
+ * Read backwards for the most recent. DESKTOP ONLY: it is a generated summary of
+ * the work and names projects and features freely, so the published projection
+ * does not carry it. That is enforced by the allowlist in toPublicBoard rather
+ * than by remembering it here.
+ */
+function titleOf(entries) {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const t = entries[i]?.aiTitle;
+    if (typeof t === 'string' && t.trim()) return t.trim();
+  }
+  return '';
+}
+
 /** A branch worth rendering. `HEAD` is a detached head and says nothing; the
  *  field is absent outside a repository. Neither is a failure. */
 function branchOf(entries) {
@@ -475,7 +496,7 @@ async function readOne(session, now, touched) {
     // process's own busy flag are still real, so the row keeps them.
     return {
       status: pid.busy ? 'working' : 'idle',
-      lastTool: '', movedAt: null, branch: '', name: pid.name,
+      title: '', lastTool: '', movedAt: null, branch: '', name: pid.name,
       agents: [], agentsCapped: 0,
     };
   }
@@ -507,6 +528,7 @@ async function readOne(session, now, touched) {
     status,
     // A tool NAME, never a tool argument and never prompt text. Desktop only;
     // the published projection drops it.
+    title: titleOf(entries),
     lastTool: lastTool(entries),
     movedAt: new Date(st.mtimeMs).toISOString(),
     branch: branchOf(entries),

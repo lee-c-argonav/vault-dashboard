@@ -452,20 +452,33 @@ function sessionRow(s, now) {
   // session last published — the moment there was any observed activity to show,
   // which is exactly when a session is most worth reading about.
   const sub = [activity, s.context].filter(Boolean).join('  ·  ');
-  const row = el('div', `sess is-${s.status || 'unknown'}${sub ? ' has-ctx' : ''}`);
+  // The session's own description leads, in the same weight a run's goal gets,
+  // because that is the line you read to know what a row is about. A session
+  // writes it itself and rewrites it as the work moves, so it cannot go stale
+  // the way a hand-written label would. Suppressed when it merely repeats the
+  // name, which happens when the session was renamed by hand.
+  const title = s.title && s.title !== s.name ? s.title : '';
+  const row = el('div', `sess is-${s.status || 'unknown'}${sub ? ' has-ctx' : ''}${title ? ' has-title' : ''}`);
   const head = el('div', 'sess-head');
   head.append(el('i', 'sess-dot'));
-  // The session's own name leads, and the path follows it, so this row answers
-  // "which session" the way a run row answers "which run" — with a name rather
-  // than a location. NO STATUS rows were a path and an uptime and nothing else.
-  const label = el('span', 'sess-label', s.name ? `${s.name} · ${sessionText(s, now)}` : sessionText(s, now));
-  label.title = `${s.where || s.project} · pid ${s.pid} · ${s.tty}`;
+
+  // With a description, the name and location drop to a second line: they answer
+  // "which session", and the description answers "about what", which is the
+  // question a glance is asking.
+  const where = s.name ? `${s.name} · ${sessionText(s, now)}` : sessionText(s, now);
+  const label = el('span', title ? 'sess-title' : 'sess-label', title || where);
+  label.title = title ? `${title}\n${where}` : `${s.where || s.project} · pid ${s.pid} · ${s.tty}`;
   head.append(label);
   // The process's own answer where there is one. NO STATUS is now reserved for
   // a session that could not be joined at all — a Kimi session, or one whose
   // files are unreadable — rather than being the default for everything.
   head.append(el('span', 'sess-tag', (s.status || (s.context ? 'idle' : 'no status')).toUpperCase()));
   row.append(head);
+  if (title) {
+    const meta = el('div', 'sess-where', where);
+    meta.title = `${s.where || s.project} · pid ${s.pid} · ${s.tty}`;
+    row.append(meta);
+  }
   if (sub) {
     const ctx = el('div', 'sess-ctx', sub);
     // `sub`, not `s.context`. The line clips with an ellipsis and the tooltip is
@@ -612,7 +625,7 @@ function renderRuns(runs, sessions = []) {
     // text selection this guard exists to protect.
     ...sessions.map((s) => [
       s.pid, s.tty, s.where, sessionText(s, now), s.status ?? '', s.name ?? '',
-      s.lastTool ?? '', s.branch ?? '', s.agentsCapped ?? 0, s.context ?? '',
+      s.lastTool ?? '', s.branch ?? '', s.agentsCapped ?? 0, s.context ?? '', s.title ?? '',
       // Labels and starts too, now that the row renders them by name rather than
       // counting them. A field the row shows and the signature omits renders once
       // and then never changes again.

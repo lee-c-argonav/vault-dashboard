@@ -938,6 +938,29 @@ body {
   width: 5px; height: 5px;
   align-self: center;
 }
+/* The session's own description, in the weight a run's goal gets. This is the
+   line the eye lands on, so it is the only bright thing in a session row: the
+   row previously led with a name and a path, which answer "which session" and
+   never "about what". */
+.sess-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: 13px/1.4 var(--sans);
+  color: var(--bone);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Which session, demoted under what it is about. */
+.sess-where {
+  margin: 2px 0 0 14px;
+  font: 11px/1.4 var(--mono);
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sess-label {
   flex: 1 1 auto;
   min-width: 0;
