@@ -64,6 +64,8 @@ const TOKENS_FALLBACK = `
 .run-u.is-blocked .run-u-label,.u.blocked .ul,.run-a.is-blocked .run-a-label,.a.blocked .al{color:var(--amber)}
 .dur.is-done{color:var(--dim)}.dur.is-running{color:var(--orange)}.dur.is-bad{color:var(--amber)}
 .legend{display:flex;flex-wrap:wrap;gap:4px 14px;padding:5px 0 7px;font:10px/1.4 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--text-3)}
+/* Top-right, thumb-reachable, and out of the flow so it never displaces the
+   headline. 44px is the platform's minimum touch target. */
 .legend i{display:inline-block;width:6px;height:6px;margin-right:5px}
 .legend .is-session{background:var(--orange);border-radius:50%}
 .legend .k-dur{font-variant-numeric:tabular-nums;color:var(--orange);margin-right:5px}
@@ -200,6 +202,8 @@ export function toPublicBoard(board, now) {
   };
 
   const session = (s) => (s ? {
+    // Published by decision, not by default. See the session row's comment.
+    name: typeof s.name === 'string' ? s.name : '',
     // No pid: the phone cannot focus a terminal, so it is identity with no use.
     status: s.status ?? '',
     since: s.since ?? null,
@@ -403,7 +407,7 @@ export function boardDigest(rawBoard, now = null) {
     // renders. `silentBucket` is already coarse, so it advances at the bucket
     // and not on the clock.
     sessions: unpublished.map((s) => [
-      s.since, s.status, s.silentBucket, s.agentsOut, s.agentsTotal, s.agentsCapped,
+      s.name, s.since, s.status, s.silentBucket, s.agentsOut, s.agentsTotal, s.agentsCapped,
       s.etaMins, s.etaOver, s.context,
     ]),
   })).digest('hex');
@@ -450,6 +454,12 @@ const CSS = `
 
 *,*::before,*::after{box-sizing:border-box;border-radius:0}
 body{
+  /* Positioned, so the refresh control anchors to the page rather than the
+     viewport. Absolute with no positioned ancestor pins to the visual viewport
+     and is left behind the moment the board is scrolled.
+     No backticks in this block: the whole stylesheet is a JS template literal,
+     and a backtick here ends it mid-comment. */
+  position:relative;
   margin:0 auto; max-width:680px; padding:22px 16px 48px;
   background:var(--bg); color:var(--bone);
   font:16px/1.5 var(--sans);
@@ -492,6 +502,22 @@ body{
 .rdot{flex:0 0 auto;align-self:center;width:7px;height:7px;border-radius:50%;background:var(--dim)}
 .run.running .rdot,.run.needs-input .rdot{background:var(--orange)}
 .run.blocked .rdot{background:var(--amber)}
+/* box-sizing and an explicit inline-flex. The reset sets box-sizing globally, yet this
+   element measured 10x19 without them: an inline anchor takes its content's size
+   and display:flex alone did not make it a block-level box here. 44px is the
+   platform minimum touch target, and a control this page exists to be tapped
+   with is not worth shipping at a quarter of it. */
+/* The headline's TEXT stops short of the control. Padding, not margin: these are
+   block elements, so the box still spans the full width and a box-overlap test
+   reports a collision that does not exist in ink. What matters is that no glyph
+   reaches under the control, which 56px of padding against a 44px control at
+   16px from the edge guarantees. */
+.k,.n{padding-right:56px}
+.rf-top{position:absolute;top:14px;right:16px;box-sizing:border-box;
+        display:inline-flex;width:44px;height:44px;min-width:44px;min-height:44px;
+        align-items:center;justify-content:center;font:18px/1 var(--sans);
+        color:var(--dim);text-decoration:none;border:1px solid var(--rule-hot)}
+.rf-top:active{color:var(--orange);border-color:var(--orange)}
 .hd{display:flex;align-items:baseline;gap:8px 10px;justify-content:space-between;
     flex-wrap:wrap}
 .hd h2{flex:1 1 auto;min-width:0}
@@ -757,7 +783,17 @@ function sessionSection(sessions, now) {
     // minutes and caps, so the bucket's lower edge is all this line may claim.
     if (s.silentBucket) bits.push(`silent ≥${s.silentBucket * 5}m`);
     return `<div class="sess is-${esc(s.status || 'unknown')}"><div class="sess-head"><i class="dot"></i>`
-      + `<span class="sl">session ${String(i + 1).padStart(2, '0')}</span>`
+      // The session's own name, at the operator's ask. The projection carries it
+      // now; it did not, and the ordinal stood in for it.
+      //
+      // WHY THIS IS CONSISTENT RATHER THAN A WIDENING. The name is derived from
+      // the directory, which is why it was stripped. But the 2026-08-11 decision
+      // publishes run-authored text, and a goal on this same page already reads
+      // "Close <product> to R5 and merge it into v2-clean" — the codename is
+      // three lines above the row the ordinal was protecting. Redacting a
+      // derivative of a string the page prints in full protects nothing. This is
+      // one line to reverse if that trade is ever re-made.
+      + `<span class="sl">${esc(s.name || `session ${String(i + 1).padStart(2, '0')}`)}</span>`
       // The observed status when there is one. Falling back to IDLE rather than
       // NO STATUS when a session has context is the older rule and still right:
       // the two say different things, one being a session nobody has heard from
@@ -879,6 +915,11 @@ export async function build(opts = {}) {
 <meta name="apple-mobile-web-app-title" content="Runs">
 <title>Run status</title>
 <style>${CSS}${TOKENS}</style>
+<!-- Refresh at the top right, where a thumb reaches it. The footer keeps its
+     own: installed to the home screen this page runs standalone, with no address
+     bar and no pull-to-refresh, so on a long board the footer control is a
+     scroll away exactly when the page is most worth re-reading. -->
+<a class="rf-top" href="/" aria-label="Reload this page now">↻</a>
 <p class="k">${demand ? 'Needs attention' : 'Active runs'}</p>
 <p class="n${demand ? '' : ' calm'}">${String(demand || active.length).padStart(2, '0')}</p>
 ${attentionCaption(att)

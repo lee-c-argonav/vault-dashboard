@@ -240,3 +240,19 @@ test('the unreadable todo mark is gone from both surfaces', () => {
   const todo = resolve('--st-todo', PALETTES['desktop dark']);
   assert.notEqual(todo.toUpperCase(), '#2A2D33', 'todo mark is back to the 1.44:1 value');
 });
+
+// The phone's whole stylesheet is a JS template literal, so a backtick anywhere
+// inside it — including in a CSS comment — ends the literal mid-file and the
+// module stops parsing. It cost two build failures in one sitting, both times
+// from writing `display:flex` in a comment out of ordinary code-comment habit.
+// The syntax error names a line far from the cause, which is what makes it
+// expensive rather than merely annoying.
+test('the phone stylesheet contains no backticks', () => {
+  const start = BUILD.indexOf('const CSS = `');
+  assert.ok(start > 0, 'could not find the phone CSS template');
+  const from = BUILD.indexOf('`', start + 12) + 1;
+  const end = BUILD.indexOf('`;', from);
+  const css = BUILD.slice(from, end);
+  assert.ok(!css.includes('`'),
+    'a backtick inside the CSS template literal ends it early; quote CSS in comments plainly');
+});

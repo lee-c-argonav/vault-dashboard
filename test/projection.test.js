@@ -49,9 +49,12 @@ function hostileBoard() {
 }
 
 /** Every substring that must not survive the projection. */
+// The session NAME is deliberately absent from this list as of 2026-08-11: it is
+// published by the operator's decision. Everything else here stays forbidden, and
+// the name being publishable does not make the path, the branch or a sub-agent
+// label publishable — those are the fields this list exists for.
 const FORBIDDEN = [
   'Desktop/repos/projectcodename',
-  'projectcodename-4e',
   'mcp__playwright__browser_close',
   'browser_close',
   'feature/SECRET-1234-rename',
@@ -66,6 +69,28 @@ test('the projection drops every confidential field', () => {
   for (const bad of FORBIDDEN) {
     assert.ok(!json.includes(bad), `"${bad}" survived the projection`);
   }
+});
+
+test('the session name is published, and nothing else identifying rides with it', () => {
+  const out = toPublicBoard(hostileBoard(), NOW);
+  const s = out.unpublished[0];
+  assert.equal(s.name, 'projectcodename-4e', 'the name did not reach the page');
+  // The reason the name is allowed is that run goals already print the same
+  // codename in full. That is not a licence for the fields around it.
+  assert.equal(s.where, undefined);
+  assert.equal(s.branch, undefined);
+  assert.equal(s.lastTool, undefined);
+  assert.equal(s.title, undefined);
+  assert.equal(s.pid, undefined);
+  assert.equal(s.agents, undefined);
+});
+
+test('a renamed session reaches the phone, because the digest sees the name', () => {
+  const a = hostileBoard();
+  const b = hostileBoard();
+  b.unpublished[0].name = 'projectcodename-9z';
+  assert.notEqual(boardDigest(a, NOW), boardDigest(b, NOW),
+    'a rename fired no deploy, so the phone would show the old name forever');
 });
 
 test('the projection keeps what the phone is actually read for', () => {
