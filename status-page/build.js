@@ -22,10 +22,10 @@ import { readSessions } from '../sessions.js';
 import { readTranscripts } from '../transcripts.js';
 import {
   LABEL, runState, stateText, durationOf, unitWindow, expandSet, askOf, quietMs,
-  eta, etaText, elapsedText, humanMs, counts, partitionRuns, linkSessions, batchStamped,
+  elapsedText, humanMs, counts, partitionRuns, linkSessions, batchStamped,
   STALE_MS,
   sessionContext, sortRank, blockedNote, FINISHED_MAX_AGE_MS, agentEta, URGENCY,
-  attentionModel, attentionCaption,
+  attentionModel, attentionCaption, clockAt, goalEta, goalEtaText,
 } from '../public/runs-view.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -634,12 +634,36 @@ function unitRows(units, now) {
   ].join('');
 }
 
+/**
+ * The published fan-out estimate, in the one language: `~15m left` for the
+ * bucketed point, `≥2h left` for the top-of-scale floor, `past the usual` when
+ * the sample stopped predicting. One function for the run card and the session
+ * row, which each carried their own copy of this ternary before.
+ *
+ * `≥`, not a trailing `+`: `+` before a duration is the still-running tense
+ * marker everywhere on both boards, and `2h+` used the same glyph for "at
+ * least" one line away from `+5m` meaning "still going".
+ */
+function publicEtaText(s) {
+  if (s.etaOver) return 'past the usual';
+  if (!s.etaMins) return '';
+  return s.etaMins >= 120 ? '≥2h left' : `~${s.etaMins}m left`;
+}
+
 function runCard(r, now, expanded) {
   const st = runState(r);
   const ask = askOf(r, now);
   const c = counts(r.units);
-  const e = eta(r.units);
   const elapsed = elapsedText(r, now);
+  // The goal's remaining time, or the reason there is none — never a silent
+  // blank while work remains. On this surface the floor branch cannot arise:
+  // the projection strips the per-agent spans it needs, so goalEta degrades to
+  // the why, which is the phone's coarseness rule doing its job. No finish
+  // clock here either: the page rebuilds only when the digest moves, so a
+  // printed clock target would outlive its estimate; a delta ages visibly
+  // beside the Built stamp, a stale clock lies precisely.
+  const goal = goalEtaText(goalEta(r, now));
+  const began = clockAt(r.started, now);
   if (!expanded) {
     // Same rule as the desktop: at scale most runs collapse to one line, and
     // the surfaces must agree about which ones. expandSet decides for both.
@@ -667,14 +691,12 @@ function runCard(r, now, expanded) {
     r.session.agentsTotal + (r.session.agentsCapped || 0)} sub-agents — ${
     r.session.agentsOut
       ? `${r.session.agentsOut} still running, ${r.session.agentsTotal - r.session.agentsOut} returned${
-        r.session.etaOver ? ' — past the usual'
-          : r.session.etaMins
-            ? (r.session.etaMins >= 120 ? ' — 2h+ left' : ` — ~${r.session.etaMins}m left`)
-            : ''}`
+        publicEtaText(r.session) ? ` — ${publicEtaText(r.session)}` : ''}`
       : `all ${r.session.agentsTotal} returned`}</p>` : ''}
   <div class="foot">
-    <span><span class="mach">${esc(r.machine)}</span> · ${c.done} of ${c.total} done${elapsed ? ` · ${elapsed}` : ''}</span>
-    <span>${e ? esc(etaText(e)) : ''}</span>
+    <span><span class="mach">${esc(r.machine)}</span> · ${c.done} of ${c.total} done${
+      began ? ` · started ${esc(began)}` : ''}${elapsed ? ` · ${elapsed}` : ''}</span>
+    <span>${esc(goal)}</span>
   </div>
 </article>`;
 }
@@ -717,7 +739,9 @@ function sessionSection(sessions, now) {
   if (!sessions.length) return '';
   const rows = sessions.map((s, i) => {
     const t = Date.parse(s.since);
-    const up = Number.isFinite(t) ? humanMs(Math.max(0, now - t)) : '--';
+    // `up`, marking the tense: a bare duration is the finished-span claim, and
+    // an uptime is still growing. Matches the desktop's session line.
+    const up = Number.isFinite(t) ? `up ${humanMs(Math.max(0, now - t))}` : '--';
     // The desktop's session skeleton — headline, identity, context, each slot
     // collapsing when empty — holding only what the projection allows. The
     // headline is the ordinal, because it is the only identity toPublicBoard
@@ -726,13 +750,12 @@ function sessionSection(sessions, now) {
     const bits = [up];
     if (s.agentsOut) bits.push(`${s.agentsOut} of ${s.agentsTotal} sub-agents still running`);
     else if (s.agentsTotal) bits.push(`${s.agentsTotal} sub-agents, all returned`);
-    // Bucketed at five minutes by the projection, so the phrase is honest about
-    // its own resolution rather than implying a precision it does not have.
     // The estimate rides the same line as the counts, because it is the same
     // fact continued: how many are out, and how long they have left.
-    if (s.etaOver) bits.push('past the usual');
-    else if (s.etaMins) bits.push(s.etaMins >= 120 ? '2h+ left' : `~${s.etaMins}m left`);
-    if (s.silentBucket) bits.push(`silent ${s.silentBucket * 5}m+`);
+    if (publicEtaText(s)) bits.push(publicEtaText(s));
+    // `≥`, the floor marker, not a trailing `+`. The projection buckets at five
+    // minutes and caps, so the bucket's lower edge is all this line may claim.
+    if (s.silentBucket) bits.push(`silent ≥${s.silentBucket * 5}m`);
     return `<div class="sess is-${esc(s.status || 'unknown')}"><div class="sess-head"><i class="dot"></i>`
       + `<span class="sl">session ${String(i + 1).padStart(2, '0')}</span>`
       // The observed status when there is one. Falling back to IDLE rather than
@@ -755,12 +778,15 @@ function historySection(finished, now) {
     const c = counts(r.units);
     const ended = Date.parse(r.updated);
     const when = Number.isFinite(ended)
-      ? new Date(ended).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+      ? `ended ${new Date(ended).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
       : 'no date';
     const took = ranFor(r);
+    // `took`, naming the claim: a bare `Aug 8 · 40h43m` leaves the date's role
+    // (started? ended?) and the duration's tense to be guessed. It ended then
+    // and it took that long.
     return `<div class="h">` +
       `<span class="hg">${esc(r.goal)}</span>` +
-      `<span class="hm">${esc(when)}${took ? ` · ${esc(took)}` : ''}</span>` +
+      `<span class="hm">${esc(when)}${took ? ` · took ${esc(took)}` : ''}</span>` +
       (r.note ? `<span class="hsub">${esc(r.note)}</span>` : '') +
       `<span class="hsub">${esc(r.project || '—')} · ${c.done}/${c.total} units</span>` +
       `</div>`;

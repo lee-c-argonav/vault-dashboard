@@ -772,11 +772,6 @@ body {
 /* A grouped workflow row has a fourth cell, the multiplier, between the label
    and the duration. Its own grid rather than a wider one for every row: an
    ungrouped row has nothing to put there and would carry a dead column. */
-/* max-content on the multiplier: `auto` let the label claim the space and the
-   count then overflowed its own column into the duration, because it is nowrap.
-   The label is the only thing that may be truncated here. */
-.run-a.is-group { grid-template-columns: 4px minmax(0, 1fr) max-content 82px; }
-.run-a.is-group .dur { grid-column: 4; }
 
 /* Observed fan-out, beneath the units and above the footer. Row-scoped because
    nothing on disk maps a sub-agent to a unit; the declared per-unit clusters
@@ -799,6 +794,29 @@ body {
 /* An overrun is a different claim from a countdown, so it does not read as one. */
 .run-agents-eta.is-over { color: var(--amber); }
 
+/* The fan-out strip: a time axis from dispatch to the slowest RETURNED span,
+   one 1px tick per agent, positioned by fanoutStrip (runs-view.js). Grey ticks
+   at 5px are returns (spread reads as clustering), orange at 8px are live
+   agents at their elapsed (progress reads as ticks marching right), amber
+   clamped at the end is one past every return. Ticks, not bars: at 178 agents
+   a bar per agent is a solid block, while 1px ticks overplot into density,
+   which is the honest picture of mass. Desktop only — per-agent spans are what
+   toPublicBoard strips, so the phone keeps its bucketed text. The hairline is
+   the axis; done ticks use --dim (3.85:1 on --panel), the done-duration colour,
+   not --dimmer (1.96:1), which a 1px mark does not survive. */
+.fan-strip {
+  position: relative;
+  height: 9px;
+  margin: 3px 0 2px 81px;
+  border-bottom: 1px solid var(--rule-hot);
+}
+.fan-t { position: absolute; bottom: 0; width: 1px; }
+.fan-t.is-done { height: 5px; background: var(--dim); }
+.fan-t.is-live { height: 8px; background: var(--orange); }
+.fan-t.is-over { height: 8px; background: var(--amber); }
+/* Session rows have no unit column to clear, same as .run-agents-head above. */
+.sess .fan-strip { margin-left: 14px; }
+
 /* Overflow markers at either end of the window, so a hidden unit is visible as
    a count rather than silently absent. */
 .run-u-more {
@@ -814,9 +832,14 @@ body {
   padding-top: 8px;
   border-top: 1px solid var(--rule);
   display: flex;
+  /* Wraps between its two statements. The left side grew `started 17:00` and
+     the right grew a why-clause (`no estimate · 0 of 14 units timed`); on a
+     narrow window the pair exceeds the row, and clipping either would silently
+     drop a claim. line-height 1.5 so a wrapped pair does not collide. */
+  flex-wrap: wrap;
   justify-content: space-between;
-  gap: 12px;
-  font: 11px/1 var(--mono);
+  gap: 4px 12px;
+  font: 11px/1.5 var(--mono);
   letter-spacing: .09em;
   color: var(--dim);
   font-variant-numeric: tabular-nums;

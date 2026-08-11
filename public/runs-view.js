@@ -473,7 +473,10 @@ export function contextBreakdown(state) {
 /** How long a session has been up, for the one line it gets. */
 export function sessionText(s, now) {
   const t = Date.parse(s.since);
-  const up = Number.isFinite(t) ? humanMs(Math.max(0, now - t)) : '--';
+  // `up`, not a bare duration. A bare duration is the TOOK claim — a finished
+  // span — and an uptime is still growing; unmarked, `8h58m` on a session row
+  // read exactly like `8h58m` on a done unit while claiming the opposite tense.
+  const up = Number.isFinite(t) ? `up ${humanMs(Math.max(0, now - t))}` : '--';
   return `${s.where || s.project || 'unknown'} · ${up}`;
 }
 
@@ -484,9 +487,16 @@ export function sessionText(s, now) {
  * with its result and not before it — so the current tool is not knowable and a
  * row claiming otherwise would be inventing it.
  */
-export function sessionActivity(s) {
+export function sessionActivity(s, now = null) {
   const bits = [];
-  if (s.status === 'stalled') bits.push('SILENT');
+  // With its figure, matching the phone, which has always shown one (`silent
+  // ≥10m`). The desktop said a bare SILENT about a session stalled two minutes
+  // and one stalled two hours, and the difference is the whole judgment call.
+  if (s.status === 'stalled') {
+    const t = Date.parse(s.movedAt);
+    bits.push(now !== null && Number.isFinite(t)
+      ? `SILENT ${humanMs(Math.max(0, now - t))}` : 'SILENT');
+  }
   // 'open' is in the out set too. agentState returns it for an agent whose
   // transcript has no message yet, which is precisely a just-dispatched one —
   // counting it as done reported "01 AGENTS DONE" about an agent two seconds old.
@@ -630,6 +640,114 @@ export function humanMs(ms) {
   return m % 60 ? `${h}h${m % 60}m` : `${h}h`;
 }
 
+// Fixed English tables, not toLocaleDateString: the board already prints its
+// weekday this way (todayLabel: 'TUE'), and a locale-dependent form would make
+// the same stamp render differently on two machines and in tests.
+const DAY = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * A moment as a clock time — the AT claim, distinct from every duration.
+ *
+ * The board spoke almost entirely in deltas: a run said "3h53m elapsed" and
+ * never when it began, and a fan-out said "~15m left" and never when that lands.
+ * A delta answers "how much"; the operator planning around the work needs
+ * "when", and converting in your head is the reader doing the instrument's job.
+ *
+ * Always a clock, never a duration, so the two claim kinds cannot be confused:
+ * `17:00` today, `SAT 02:14` within the week (a bare clock across midnight
+ * silently reads as today, which a run that started yesterday at 17:00 would
+ * exploit), `Aug 2` beyond, where the hour no longer matters. Local time — the
+ * daemon and the operator share a machine, and the phone's Built stamp already
+ * chose local.
+ */
+export function clockAt(at, now) {
+  const t = typeof at === 'number' ? at : Date.parse(at);
+  if (!Number.isFinite(t)) return '';
+  const d = new Date(t);
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  if (d.toDateString() === new Date(now).toDateString()) return hm;
+  if (Math.abs(t - now) < 6 * 86_400_000) return `${DAY[d.getDay()]} ${hm}`;
+  return `${MON[d.getMonth()]} ${d.getDate()}`;
+}
+
+/**
+ * Where an estimate lands on the wall clock. `by` on a range, because only the
+ * high bound is a commitment the band supports; a bare clock on a range would
+ * promote the midpoint to a fact.
+ *
+ * Desktop only by design. The phone is rebuilt only when the board digest
+ * moves, so a printed clock target outlives its estimate: a delta ages visibly
+ * ("~15m left" beside a Built stamp), a stale clock lies precisely.
+ */
+export function finishClock(e, now) {
+  if (!e || e.over) return '';
+  if (e.point != null) return clockAt(now + e.point, now);
+  if (e.high != null) return `by ${clockAt(now + e.high, now)}`;
+  return '';
+}
+
+/**
+ * Time left on the GOAL — the one figure the run footer states, with the rule
+ * that it always says something while work remains.
+ *
+ * A run row can carry two forecasts: eta(units) about the whole goal and
+ * agentEta about the current fan-out. They answer different questions and can
+ * disagree, so each keeps its own slot — the fan-out figure lives in the
+ * sub-agent block, this one in the footer — and this function decides what the
+ * footer's claim honestly is:
+ *
+ *   estimate — eta(units) exists: a real forecast over the goal.
+ *   floor    — units cannot support a forecast but a live fan-out can bound it:
+ *              the goal cannot finish before its current fan-out does, so the
+ *              fan-out's optimistic end is a floor on the goal. A floor, never
+ *              promoted to a forecast — the remaining units are unmeasured.
+ *   none     — nothing estimable; `why` says what is missing, because a blank
+ *              where a band goes reads as an instrument failure. Observed on the
+ *              live board 2026-08-11: 0 of 14 units done, a fan-out estimating
+ *              away one line up, and the goal slot silently empty.
+ *
+ * Combining the two into one number was considered and rejected: below the
+ * sample floor there is no unit mean to add to the fan-out bound, and above it
+ * eta already charges the running unit a full mean — replacing that term with
+ * the fan-out bound is a model change three samples cannot justify.
+ *
+ * Returns null when there is nothing to claim at all: no units, or none left.
+ */
+export function goalEta(run, now) {
+  const units = Array.isArray(run.units) ? run.units : [];
+  if (!units.length) return null;
+  if (!units.some((u) => u.state === 'todo' || u.state === 'running')) return null;
+  const e = eta(units);
+  if (e) return { kind: 'estimate', ...e };
+
+  const batched = batchStamped(units);
+  const stamped = units.filter((u) => u.state === 'done' && u.started && u.ended
+    && Date.parse(u.ended) - Date.parse(u.started) > 0);
+  const timed = stamped.filter((u) => !batched.has(u)).length;
+  // Batching is named only when it is the whole story — samples existed and the
+  // exclusion took the count below the floor. Otherwise the count speaks.
+  const why = stamped.length >= MIN_SAMPLES && timed < MIN_SAMPLES
+    ? 'stamps written in one batch'
+    : `${timed} of ${units.length} units timed`;
+
+  const ae = agentEta(run.session?.agents ?? [], now);
+  if (ae && !ae.over) {
+    const low = ae.point ?? ae.low;
+    // A floor under a minute claims nothing; fall through to the why.
+    if (low >= 60_000) return { kind: 'floor', low, why };
+  }
+  return { kind: 'none', why };
+}
+
+/** The footer slot's text. `≥` marks a floor — the claim, not a rounding. */
+export function goalEtaText(g) {
+  if (!g) return '';
+  if (g.kind === 'estimate') return etaText(g);
+  if (g.kind === 'floor') return `≥${humanMs(g.low)} left · ${g.why}`;
+  return `no estimate · ${g.why}`;
+}
+
 // The sample count stays on the object but is no longer rendered: the estimate
 // is already suppressed below MIN_SAMPLES, so the floor is enforced whether or
 // not the number is on screen.
@@ -637,6 +755,50 @@ export function etaText(e) {
   if (!e) return '';
   if (e.point != null) return `~${humanMs(e.point)} left`;
   return `${humanMs(e.low)}–${humanMs(e.high)} left`;
+}
+
+/**
+ * Measured spans of a fan-out's returned agents, unsorted. One extractor for
+ * the estimator and the strip, so the two instruments cannot disagree about
+ * what counts as a sample.
+ */
+const agentSpans = (list) => list
+  .filter((a) => a.state === 'done' && a.started && a.movedAt)
+  .map((a) => Date.parse(a.movedAt) - Date.parse(a.started))
+  .filter((ms) => Number.isFinite(ms) && ms > 0);
+
+/**
+ * The fan-out as marks on a time axis, for the strip the desktop draws.
+ *
+ * A text range states two numbers about a distribution; the strip shows the
+ * distribution. The axis runs from dispatch to the slowest span that RETURNED —
+ * the same anchor agentEta's pessimistic bound uses — so the picture and the
+ * estimate are one model. Each returned agent is a tick at how long it took
+ * (spread reads as clustering), each live one a tick at its elapsed so far
+ * (progress reads as ticks marching right). A live agent past the axis clamps
+ * at the end with `over` set: the PAST state, visible before it is read.
+ *
+ * Null below MIN_SAMPLES, exactly when agentEta refuses too: with nothing
+ * returned the axis would be invented. Stalled agents appear nowhere — plotting
+ * one as live claims motion, as returned claims a measurement, and it is
+ * neither.
+ *
+ * Fractions, not pixels: the renderer owns its width. Desktop only by design —
+ * per-agent spans are precisely what toPublicBoard strips, and per-tick
+ * positions are continuous clock values the digest could never hold still.
+ */
+export function fanoutStrip(agents, now) {
+  const list = agents ?? [];
+  const spans = agentSpans(list);
+  if (spans.length < MIN_SAMPLES) return null;
+  const axis = Math.max(...spans);
+  const live = list.filter((a) => a.state === 'running' || a.state === 'open')
+    .map((a) => {
+      const t = Date.parse(a.started);
+      const ms = Number.isFinite(t) ? Math.max(0, now - t) : 0;
+      return { frac: Math.min(1, ms / axis), over: ms > axis };
+    });
+  return { axis, done: spans.map((ms) => ms / axis), live };
 }
 
 /**
@@ -661,10 +823,7 @@ export function agentEta(agents, now = Date.now()) {
   // when its parent died and calls counting it as running "the defect this module
   // exists to remove"; feeding it here reintroduced that in another column, so a
   // fan-out with one agent stalled 90m advertised "~7m left".
-  const done = list.filter((a) => a.state === 'done' && a.started && a.movedAt)
-    .map((a) => Date.parse(a.movedAt) - Date.parse(a.started))
-    .filter((ms) => Number.isFinite(ms) && ms > 0)
-    .sort((x, y) => x - y);
+  const done = agentSpans(list).sort((x, y) => x - y);
   if (done.length < MIN_SAMPLES) return null;
 
   // Only what can still finish. A stalled agent has no time left; it has stopped.
@@ -785,6 +944,15 @@ export function rowSignature(run, now) {
         ...u.agents.filter((a) => a.state === 'running').map((a) => bucket(a.started, now))]).join(','),
     bucket(run.started, now),
     bucket(run.needsInput[0]?.since ?? run.blockers[0]?.since, now),
+    // The OBSERVED fan-out. The row renders it — the header counts, the strip,
+    // the goal floor — and none of its inputs were in the signature: the block
+    // repainted only because bucket(run.started) happens to tick each minute,
+    // so an agent returning showed up to 60s late, and anything rendered from
+    // these fields alone would have frozen outright. State plus a minute bucket
+    // per agent, the resolution everything derived from them prints at.
+    (Array.isArray(run.session?.agents) ? run.session.agents : [])
+      .map((a) => `${a?.id ?? ''}${a?.state ?? ''}${bucket(a?.started, now)}`).join(','),
+    run.session?.agentsCapped ?? '',
   ].join('\u0000');
 }
 
@@ -939,7 +1107,10 @@ export function askOf(run, now) {
     const ms = source.since ? now - Date.parse(source.since) : null;
     // A `since` in the future is the same writer bug durationOf reports, and
     // rendering it as `--` said nothing at all.
-    const age = !Number.isFinite(ms) ? '' : ms < 0 ? ' · not yet' : ` · ${humanMs(ms)}`;
+    // `waiting`, not a bare figure: this duration is still growing, and a bare
+    // duration is reserved for a finished span. It also names the claim — how
+    // long this has been stopped on a human — which a suffixed `· 47m` did not.
+    const age = !Number.isFinite(ms) ? '' : ms < 0 ? ' · not yet' : ` · waiting ${humanMs(ms)}`;
     return text + age;
   }
   // `running` is here as well as `blocked` because a run that is working with

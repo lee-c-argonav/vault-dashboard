@@ -6,7 +6,7 @@
 // Both import it so the two surfaces cannot disagree about whether a run is
 // waiting on you. Liveness lives here, not in State: State is diffed by
 // stringify below, so a clock-derived field would look changed on every push.
-import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText, sessionActivity, mergedRank, attentionModel, attentionCaption, agentEta, contextBreakdown }
+import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText, sessionActivity, mergedRank, attentionModel, attentionCaption, agentEta, contextBreakdown, clockAt, finishClock, goalEta, goalEtaText, fanoutStrip }
   from './runs-view.js';
 
 const STATE_SOURCES = ['/api/state'];
@@ -506,12 +506,34 @@ function runRow(r, now, expanded = true) {
   row.addEventListener('click', () => openRunTerminal(r.runId, row));
 
   const c = counts(r.units);
-  const e = eta(r.units);
   const foot = el('div', 'run-foot');
   const elapsed = elapsedText(r, now);
+  // The AT beside the SO FAR. "3h53m elapsed" alone makes the reader do the
+  // subtraction to know when the run began; the clock is the fact, the delta
+  // the magnitude, and they are cheap to state together.
+  const began = clockAt(r.started, now);
   foot.append(el('span', null,
-    `${c.done} of ${c.total} done` + (elapsed ? ` · ${elapsed}` : '')));
-  foot.append(el('span', null, e ? etaText(e) : ''));
+    `${c.done} of ${c.total} done`
+    + (began ? ` · started ${began}` : '')
+    + (elapsed ? ` · ${elapsed}` : '')));
+  // The GOAL's time left — one slot, never silently blank while work remains.
+  // goalEta decides the claim: a forecast from timed units, a ≥floor borrowed
+  // from the live fan-out, or the reason no estimate exists. The fan-out's own
+  // figure stays in the sub-agent block above; the two answer different
+  // questions and each sits with its subject.
+  const g = goalEta(r, now);
+  const fin = g?.kind === 'estimate' ? finishClock(g, now) : '';
+  const slot = el('span', null, goalEtaText(g) + (fin ? ` · ${fin}` : ''));
+  if (g?.kind === 'estimate') {
+    slot.title = `Estimated from ${g.measured} timed units — mean unit time × what remains, `
+      + 'widened by the measured spread. The clock is the projected finish.';
+  } else if (g?.kind === 'floor') {
+    slot.title = 'A floor, not a forecast: the goal cannot finish before its current '
+      + 'fan-out does, and too few units have finished with usable stamps to estimate the rest.';
+  } else if (g) {
+    slot.title = 'A forecast needs 3 independently timed units; this run does not have them yet.';
+  }
+  foot.append(slot);
   row.append(foot);
   return row;
 }
@@ -525,7 +547,7 @@ function runRow(r, now, expanded = true) {
  * osascript. Same rule as `run:`; see run-terminal.js.
  */
 function sessionRow(s, now) {
-  const activity = sessionActivity(s);
+  const activity = sessionActivity(s, now);
   // Both, not one. `activity || context` dropped the goal-recall line — what the
   // session last published — the moment there was any observed activity to show,
   // which is exactly when a session is most worth reading about.
@@ -547,7 +569,9 @@ function sessionRow(s, now) {
   // the name (a hand-renamed session) falls through to the same string.
   const headline = s.title || s.name || s.where || s.project || `pid ${s.pid}`;
   const t = Date.parse(s.since);
-  const up = Number.isFinite(t) ? humanMs(Math.max(0, now - t)) : '--';
+  // `up 8h58m`, not a bare `8h58m`: a bare duration is reserved for a finished
+  // span, and an uptime is still growing. Same form as the phone.
+  const up = Number.isFinite(t) ? `up ${humanMs(Math.max(0, now - t))}` : '--';
   // The identity line answers "which session · where · how long", and drops only
   // a part the headline already said, so the slot collapses content without
   // changing the row's shape. Every part is in the render signature: name and
@@ -667,9 +691,38 @@ function agentList(agents, capped, now) {
       + 'so how much it has left is not estimable from them.';
     head.append(over);
   } else if (e) {
-    head.append(el('span', 'run-agents-eta', etaText(e)));
+    // The projected landing as a clock beside the delta — the operator asked
+    // when a fan-out finishes, not only how far away that is. `by` on a range:
+    // only the high bound is a commitment the band supports.
+    const fin = finishClock(e, now);
+    head.append(el('span', 'run-agents-eta', etaText(e) + (fin ? ` · ${fin}` : '')));
   }
   wrap.append(head);
+
+  // The fan-out drawn, not only counted: a time axis from dispatch to the
+  // slowest RETURNED span. Grey ticks are returns at how long each took —
+  // spread reads as clustering — and orange ticks are live agents at their
+  // elapsed so far, marching right. One clamped amber at the end is an agent
+  // past everything that returned, the same fact the PAST text states. CSS and
+  // absolute positioning only; fractions come from the shared model so the
+  // picture and the estimate cannot disagree.
+  const marks = fanoutStrip(agents, now);
+  if (marks) {
+    const bar = el('div', 'fan-strip');
+    bar.title = `Each grey tick: a returned agent at how long it took. Each orange tick: `
+      + `a live agent at its elapsed so far. Axis 0–${humanMs(marks.axis)} (the slowest return); `
+      + 'amber at the end is an agent past every return.';
+    const tick = (cls, frac) => {
+      const t = el('i', `fan-t ${cls}`);
+      // 99.6, not 100: a 1px tick placed at left:100% sits outside the track.
+      // Half a percent of nudge on an ~500px strip is under 3px.
+      t.style.left = `${Math.min(99.6, frac * 100).toFixed(2)}%`;
+      return t;
+    };
+    for (const f of marks.done) bar.append(tick('is-done', f));
+    for (const l of marks.live) bar.append(tick(l.over ? 'is-over' : 'is-live', l.frac));
+    wrap.append(bar);
+  }
 
   // When nothing is out, name the most recent returns instead of showing a bare
   // count. A session whose 35 agents have all come back has just done 35 things,
@@ -712,15 +765,19 @@ function agentList(agents, capped, now) {
       // surfacing, and a row that reads `running` while a member is stuck hides
       // exactly what the operator is scanning for.
       const state = g.members.some((m) => m.state === 'stalled') ? 'stalled' : 'running';
+      // THREE columns, the same as every other row. A fourth cell for the count
+      // needed its own grid, and that grid did not resolve as written — the
+      // count's column came out 82px against ~110px of text and spilled into the
+      // duration. The count belongs in the label anyway: it is part of what the
+      // row is called, not a separate measurement.
       const row = el('div', `run-a is-group is-${state}`);
       row.append(el('i', 'run-a-dot'));
-      const label = el('span', 'run-a-label', g.label || g.workflow);
       const stalled = g.members.filter((m) => m.state === 'stalled').length;
-      const n = el('span', 'run-a-count',
-        `×${g.members.length}${stalled ? ` · ${stalled} STALLED` : ''}`);
+      const label = el('span', 'run-a-label',
+        `${g.label || g.workflow} ×${g.members.length}${stalled ? ` · ${stalled} stalled` : ''}`);
       label.title = `${g.members.length} agents in this workflow`
         + (stalled ? `, ${stalled} of them stalled` : '');
-      row.append(label, n);
+      row.append(label);
       // The OLDEST member's elapsed, because a batch is finished when its
       // slowest member is, and that is the number the operator is waiting on.
       const oldest = g.members.reduce((a, b) =>
@@ -761,11 +818,12 @@ function renderRuns(runs, sessions = []) {
   // the overstatement this whole change exists to remove.
   $('runs-count').textContent =
     `${pad2(runs.length)} RUNS` +
-    // SILENT, not QUIET. QUIET already means "this run has not written in N
-    // minutes" on a run row (runs-view.js stateText), and the counter was using
-    // the same word for "this session has no run file at all". Two facts, one
-    // word, six inches apart on the same panel.
-    (sessions.length ? ` · ${pad2(sessions.length)} SILENT` : '') +
+    // NO RUN FILE, the fact itself. The counter said QUIET, then SILENT, and
+    // both collided with a different claim already on the panel: QUIET is a run
+    // file that stopped moving (stateText), and SILENT is now a session whose
+    // transcript stopped moving, with a figure (sessionActivity). This count is
+    // neither — it is sessions publishing no run file at all.
+    (sessions.length ? ` · ${pad2(sessions.length)} NO RUN FILE` : '') +
     (needing ? ` · ${pad2(needing)} NEEDS YOU` : '');
 
   // Rebuild only when something displayed actually changed. This render is
@@ -849,7 +907,9 @@ function groupedRows(runs, sessions, now) {
       const quiet = list.filter((r) => !r.runId).length;
       head.append(el('span', 'repo-tally',
         `${pad2(list.length)} ${list.length === 1 ? 'ROW' : 'ROWS'}` +
-        (quiet ? ` · ${pad2(quiet)} SILENT` : '') +
+        // Same word as the panel counter, for the same reason: this counts
+        // sessions with no run file, not silence.
+        (quiet ? ` · ${pad2(quiet)} NO RUN FILE` : '') +
         (needing ? ` · ${pad2(needing)} NEEDS YOU` : '')));
       rows.push(head);
     }
