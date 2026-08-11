@@ -64,6 +64,11 @@ const TOKENS_FALLBACK = `
 .dur.is-done{color:var(--dim)}.dur.is-running{color:var(--orange)}.dur.is-bad{color:var(--amber)}
 .legend{display:flex;flex-wrap:wrap;gap:4px 14px;padding:5px 0 7px;font:10px/1.4 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--text-3)}
 .legend i{display:inline-block;width:6px;height:6px;margin-right:5px}
+.legend .is-session{background:var(--orange);border-radius:50%}
+.legend .k-dur{font-variant-numeric:tabular-nums;color:var(--orange);margin-right:5px}
+.legend .k-dur.done{color:var(--dim)}
+.legend .sep{width:1px;align-self:stretch;background:var(--rule-hot);margin:0 2px}
+.sess .dot{border-radius:50%}
 .legend .is-todo{background:transparent;box-shadow:inset 0 0 0 1px var(--dim)}
 .legend .is-running{background:var(--orange)}
 .legend .is-done{background:var(--dim)}
@@ -574,9 +579,10 @@ function runCard(r, now, expanded) {
   ${ask ? `<p class="ask${blockedNote(r) ? ' warn' : ''}">${esc(ask)}</p>` : ''}
   ${r.units.length ? `<div class="units">${unitRows(r.units, now)}</div>` : ''}
   ${r.session?.agentsTotal ? `<p class="agents">${
-    String(r.session.agentsOut).padStart(2, '0')} out · ${
-    String(r.session.agentsTotal - r.session.agentsOut).padStart(2, '0')} back${
-    r.session.agentsCapped ? ` · +${r.session.agentsCapped} more` : ''}</p>` : ''}
+    r.session.agentsTotal + (r.session.agentsCapped || 0)} sub-agents — ${
+    r.session.agentsOut
+      ? `${r.session.agentsOut} still running, ${r.session.agentsTotal - r.session.agentsOut} returned`
+      : `all ${r.session.agentsTotal} returned`}</p>` : ''}
   <div class="foot">
     <span><span class="mach">${esc(r.machine)}</span> · ${c.done} of ${c.total} done${elapsed ? ` · ${elapsed}` : ''}</span>
     <span>${e ? esc(etaText(e)) : ''}</span>
@@ -624,8 +630,8 @@ function sessionSection(sessions, now) {
     const t = Date.parse(s.since);
     const up = Number.isFinite(t) ? humanMs(Math.max(0, now - t)) : '--';
     const bits = [`session ${String(i + 1).padStart(2, '0')}`, up];
-    if (s.agentsOut) bits.push(`${s.agentsOut} agent${s.agentsOut === 1 ? '' : 's'} out`);
-    else if (s.agentsTotal) bits.push(`${s.agentsTotal} agents done`);
+    if (s.agentsOut) bits.push(`${s.agentsOut} of ${s.agentsTotal} sub-agents still running`);
+    else if (s.agentsTotal) bits.push(`${s.agentsTotal} sub-agents, all returned`);
     // Bucketed at five minutes by the projection, so the phrase is honest about
     // its own resolution rather than implying a precision it does not have.
     if (s.silentBucket) bits.push(`silent ${s.silentBucket * 5}m+`);
@@ -740,12 +746,17 @@ export async function build(opts = {}) {
 <style>${CSS}${TOKENS}</style>
 <p class="k">${needing ? 'Needs you' : 'Active runs'}</p>
 <p class="n${needing ? '' : ' calm'}">${String(needing || active.length).padStart(2, '0')}</p>
-${active.length ? `<div class="legend" role="group" aria-label="Unit state key">
+${(active.length || unpublished.length) ? `<div class="legend" role="group" aria-label="State and duration key">
   <span><i class="is-running"></i>running</span>
   <span><i class="is-blocked"></i>blocked</span>
   <span><i class="is-failed"></i>failed</span>
   <span><i class="is-todo"></i>todo</span>
   <span><i class="is-done"></i>done</span>
+  <i class="sep"></i>
+  <span><i class="is-session"></i>session</span>
+  <i class="sep"></i>
+  <span><b class="k-dur">+5m</b>still running</span>
+  <span><b class="k-dur done">5m</b>took that long</span>
 </div>` : ''}
 ${body}
 ${sessionSection(unpublished, now)}

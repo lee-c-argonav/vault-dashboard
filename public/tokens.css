@@ -196,24 +196,34 @@
    and `unknown` takes the hollow todo mark because nothing is known about it —
    which is exactly what a Kimi session, or one whose files cannot be read, is. */
 
+/* A CIRCLE, not a square. A session mark sat 14px from a sub-agent mark and both
+   were small filled squares in the same colour family, so the row read as two of
+   the same kind of thing. Shape separates the families: a session is a process
+   and gets a circle, everything inside a run — units, sub-agents — is a step and
+   gets a square, with the triangle and diamond reserved for severity. */
 .sess-dot,
 .sess .dot {
+  border-radius: 50%;
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--st-todo);
 }
 .sess.is-working .sess-dot,
 .sess.is-working .dot {
+  border-radius: 50%;
   background: var(--st-running);
   box-shadow: none;
 }
+/* No clip-path here: clipping a circle to a triangle yields a wedge that reads
+   as neither. A stalled session is carried by the amber fill plus its ring. */
 .sess.is-stalled .sess-dot,
 .sess.is-stalled .dot {
+  border-radius: 50%;
   background: var(--st-blocked);
-  box-shadow: none;
-  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--st-blocked) 30%, transparent);
 }
 .sess.is-idle .sess-dot,
 .sess.is-idle .dot {
+  border-radius: 50%;
   background: var(--st-done);
   box-shadow: none;
 }
@@ -277,4 +287,21 @@
 .legend .is-failed {
   background: var(--st-failed);
   clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+.legend .is-session { background: var(--st-running); border-radius: 50%; }
+
+/* The duration column carries two different claims in one format, and colour
+   alone separated them at 1.60:1. The leading + is the tense marker; the key
+   says so, because a mark you have to infer is a mark that gets inferred wrong. */
+.legend .k-dur {
+  font-variant-numeric: tabular-nums;
+  color: var(--dur-running);
+  margin-right: 5px;
+}
+.legend .k-dur.done { color: var(--dur-done); }
+.legend .sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--rule-hot);
+  margin: 0 2px;
 }

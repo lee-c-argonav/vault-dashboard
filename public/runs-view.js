@@ -379,8 +379,9 @@ export function sessionActivity(s) {
   // counting it as done reported "01 AGENTS DONE" about an agent two seconds old.
   const OUT = new Set(['running', 'stalled', 'open']);
   const out = (s.agents ?? []).filter((a) => OUT.has(a.state));
-  if (out.length) bits.push(`${out.length} AGENT${out.length === 1 ? '' : 'S'} OUT`);
-  else if ((s.agents ?? []).length) bits.push(`${s.agents.length} AGENTS DONE`);
+  const total = (s.agents ?? []).length;
+  if (out.length) bits.push(`${out.length} OF ${total} SUB-AGENTS STILL RUNNING`);
+  else if (total) bits.push(`${total} SUB-AGENTS, ALL RETURNED`);
   if (s.agentsCapped) bits.push(`+${s.agentsCapped} MORE`);
   if (s.lastTool) bits.push(`LAST ${s.lastTool.replace(/^mcp__[^_]+__/, '')}`);
   if (s.branch) bits.push(s.branch);
@@ -522,6 +523,23 @@ export function etaText(e) {
   if (!e) return '';
   if (e.point != null) return `~${humanMs(e.point)} left`;
   return `${humanMs(e.low)}–${humanMs(e.high)} left`;
+}
+
+/**
+ * Time left on a fan-out, from the sub-agents that have already returned.
+ *
+ * Reuses `eta` rather than reimplementing it: an agent is a unit as far as the
+ * estimator is concerned — a thing with a start, an end, and a state — and the
+ * spread model does not care what produced the samples. A returned agent's end
+ * is its file's last write, which is the same clock its start comes from.
+ */
+export function agentEta(agents) {
+  return eta((agents ?? []).map((a) => ({
+    id: a.id,
+    state: a.state === 'done' ? 'done' : 'running',
+    started: a.started,
+    ended: a.state === 'done' ? a.movedAt : null,
+  })));
 }
 
 /** How long the run has been going, from its own `started` stamp. */

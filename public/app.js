@@ -6,7 +6,7 @@
 // Both import it so the two surfaces cannot disagree about whether a run is
 // waiting on you. Liveness lives here, not in State: State is diffed by
 // stringify below, so a clock-derived field would look changed on every push.
-import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText, sessionActivity, mergedRank, loadModel, loadCaption }
+import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText, sessionActivity, mergedRank, loadModel, loadCaption, agentEta }
   from './runs-view.js';
 
 const STATE_SOURCES = ['/api/state'];
@@ -523,9 +523,23 @@ function agentList(agents, capped, now) {
   const out = agents.filter((a) => OUT.has(a.state));
   const done = agents.length - out.length;
 
+  // Words, not a ratio. "07 OUT · 29 BACK" reads as a score and does not say what
+  // is being counted or which number is the total; the operator asked what it
+  // meant. This names the thing, gives the total first, and says what the two
+  // parts are in plain language.
   const head = el('div', 'run-agents-head');
+  const total = agents.length + capped;
   head.append(el('span', 'run-agents-k',
-    `${pad2(out.length)} OUT · ${pad2(done)} BACK${capped ? ` · +${capped} MORE` : ''}`));
+    `${total} SUB-AGENT${total === 1 ? '' : 'S'}`));
+  head.append(el('span', 'run-agents-split',
+    out.length
+      ? `${out.length} STILL RUNNING · ${done} RETURNED`
+      : `ALL ${done} RETURNED`));
+  if (capped) head.append(el('span', 'run-agents-note', `${capped} NOT SHOWN`));
+
+  // Time left on the fan-out, estimated from the ones that already came back.
+  const e = out.length ? agentEta(agents) : null;
+  if (e) head.append(el('span', 'run-agents-eta', etaText(e)));
   wrap.append(head);
 
   // When nothing is out, name the most recent returns instead of showing a bare
@@ -539,7 +553,8 @@ function agentList(agents, capped, now) {
       .sort((a, b) => String(b.movedAt ?? '').localeCompare(String(a.movedAt ?? '')))
       .slice(0, RECENT);
   if (!out.length && shown.length) {
-    head.append(el('span', 'run-agents-recent', `LAST ${Math.min(RECENT, shown.length)}`));
+    head.append(el('span', 'run-agents-note',
+      `${Math.min(RECENT, shown.length)} MOST RECENT SHOWN`));
   }
 
   for (const a of shown) {

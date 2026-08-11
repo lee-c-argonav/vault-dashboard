@@ -165,12 +165,17 @@
     <!-- role="group" because ARIA prohibits naming a bare div: it computes as
          `generic`, and an aria-label on `generic` is dropped before it reaches
          any platform accessibility API. -->
-    <div class="legend" role="group" aria-label="Unit state key">
+    <div class="legend" role="group" aria-label="State and duration key">
       <span><i class="is-running"></i>running</span>
       <span><i class="is-blocked"></i>blocked</span>
       <span><i class="is-failed"></i>failed</span>
       <span><i class="is-todo"></i>todo</span>
       <span><i class="is-done"></i>done</span>
+      <i class="sep"></i>
+      <span><i class="is-session"></i>session</span>
+      <i class="sep"></i>
+      <span><b class="k-dur">+5m</b>still running</span>
+      <span><b class="k-dur done">5m</b>took that long</span>
     </div>
     <div class="pbody scroll" id="runs-list"></div>
   </section>

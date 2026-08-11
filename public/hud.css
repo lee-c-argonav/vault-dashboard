@@ -714,7 +714,12 @@ body {
   letter-spacing: .1em;
   color: var(--text-3);
 }
-.run-agents-recent { color: var(--dimmer); }
+.run-agents-k { color: var(--dim); }
+.run-agents-split { color: var(--text-3); }
+.run-agents-note { color: var(--dimmer); }
+/* Pushed right, like the run row's own ETA, so the two estimates line up as the
+   same kind of statement rather than reading as part of the count. */
+.run-agents-eta { margin-left: auto; color: var(--dim); }
 
 /* Overflow markers at either end of the window, so a hidden unit is visible as
    a count rather than silently absent. */
