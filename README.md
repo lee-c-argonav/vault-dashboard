@@ -74,6 +74,7 @@ cp .env.example .env
 |---|---|
 | `VAULT_HUD_VAULT` | **Required.** Absolute path to the Obsidian vault to read and watch. |
 | `VAULT_HUD_PORT` | Port on `127.0.0.1` (default `5959`). The server never binds any other interface. |
+| `VAULT_HUD_DATA_DIR` | Where the usage poller keeps `usage-tokens.json` (secrets, mode `0600`) and `usage.json` (default `~/Library/Application Support/vault-hud`). Never point it into the repo or the vault. |
 | `GITHUB_URL`, `SUPABASE_DASHBOARD_URL`, `VERCEL_URL`, `DEV_URL` | Targets for the shortcut-bar browser buttons. |
 | `OBSIDIAN_VAULT` | Vault **name** (not path) used to build the `obsidian://` daily-note deep link. |
 | `PROJECT_DIR` | Directory the Terminal and VS Code shortcuts open. |
@@ -226,6 +227,68 @@ compositing) accurately and only lags a single kernel that pins the GPU for seco
 Like every vital it is nullable: no reliable reading, no slot, never a confident
 wrong name.
 
+## Claude subscription usage
+
+If you run one or more Claude (Pro/Max) subscriptions, the HUD can poll their
+usage windows — the five-hour session window, the seven-day weekly windows,
+and the Fable weekly window where the plan reports one — and show each
+account's utilisation. The verdict cell answers "do I need to switch": it
+names the current account while it has headroom, and only advises a switch
+once the current account passes 80% of its session window or 90% of its
+weekly one (both fixed in `public/usage-view.js`). Which account is current
+comes from the default CLI profile, matched by account uuid — never by token
+string, which rotates on every refresh.
+
+The data lives in the **data directory**, never in the repo and never in the
+vault:
+
+| File | Contents |
+|---|---|
+| `usage-tokens.json` | One OAuth bundle per enrolled account. Secrets, written mode `0600`; only `usage-poller.js` and `usage-enroll.js` read it. |
+| `usage.json` | The public-safe snapshot the HUD renders. |
+
+The directory defaults to `~/Library/Application Support/vault-hud`; set
+`VAULT_HUD_DATA_DIR` to move it.
+
+### One-time enrollment per account
+
+```sh
+node usage-enroll.js add main "Main account"     # reads the default ~/.claude Keychain entry
+node usage-enroll.js list
+node usage-enroll.js remove main
+```
+
+`add` reads the Claude CLI's credential from the macOS Keychain (or from
+`--stdin`, if you paste the credential JSON yourself). For a second or third
+subscription, give each its own CLI profile, log each in, and enrol each one:
+
+```sh
+CLAUDE_CONFIG_DIR=~/.claude-alt claude           # create the profile and log in
+node usage-enroll.js add alt "Alt account" --config-dir ~/.claude-alt
+```
+
+Enrollment performs **one deliberate token refresh** so this copy of the
+credential is decoupled from the CLI's own. The CLI's stored refresh token goes
+stale in the process, so that profile will ask for **one re-login** the next
+time its token expires. That is the accepted tradeoff (the same one
+claude-meter makes). Afterwards the poller refreshes tokens on its own and
+nothing asks again.
+
+The poller runs inside the server: every five minutes, accounts queried
+sequentially a couple of seconds apart, and the snapshot written atomically.
+It checks for enrolled accounts once at startup, so restart the HUD after the
+first enrollment. To poll once by hand:
+
+```sh
+node usage-poller.js --once
+```
+
+**Caveat.** The usage endpoint is a private, undocumented API
+(`api.anthropic.com/api/oauth/usage`) read with each subscription's own OAuth
+token — the same mechanism third-party tools like claude-meter use. It can
+change or disappear without notice; if it does, the affected accounts show an
+error state and the rest of the dashboard is unaffected.
+
 ## Failure behaviour
 
 The window never goes blank.
@@ -339,6 +402,9 @@ mcp-vault.mjs  read-only MCP server exposing the three check tools
 shortcuts.js   the narrow command surface for the action bar
 metrics.js     macOS machine vitals sampler
 runs.js        15-Runs/ and 99-Archive/runs/ → validated run objects
+usage.js       usage.json → normalised snapshot (whitelisted fields, no clock)
+usage-poller.js  polls Claude usage endpoints, rotates OAuth tokens; --once standalone
+usage-enroll.js  enrols CLI credentials into the data directory (add/list/remove)
 sessions.js    live agent sessions, read from the process table (ps + lsof)
 run-terminal.js  focus the Terminal tab a run or session occupies
 publish.js     rebuilds and redeploys the phone status page on a timer

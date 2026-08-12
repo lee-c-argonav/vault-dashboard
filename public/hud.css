@@ -24,6 +24,9 @@
      fixed-height panel overlapped the focus text — visible on the board, which
      is where it should never have got to. */
   --band-h: 176px;
+  /* The usage strip: verdict cell plus the account rows. Kept as a var so
+     the page grid keeps summing to the viewport with the strip present. */
+  --usage-h: 118px;
   --foot-h: 30px;
 }
 
@@ -42,7 +45,12 @@ body {
      warning, a long vault path) sizes the page column past the viewport and
      silently amputates the right edge of every row, with no scrollbar. */
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: var(--head-h) var(--vit-h) var(--band-h) 1fr auto var(--foot-h);
+  /* The usage strip's track is `auto`, not var(--usage-h) like its neighbours:
+     the whole section hides when State carries no usage, and a fixed track
+     would keep 104px of dead space warm for a panel that is not there — every
+     unenrolled machine would pay it. The height lives on .usage itself, so the
+     row exists in the count and the strip is sized exactly when shown. */
+  grid-template-rows: var(--head-h) var(--vit-h) auto var(--band-h) 1fr auto var(--foot-h);
   gap: 1px;
   -webkit-font-smoothing: antialiased;
 }
@@ -379,6 +387,193 @@ body {
 }
 .cell-v.zero { color: var(--dimmer); }
 .cell-v.hot { color: var(--orange); }
+
+/* ── claude accounts ────────────────────────────────────────────────────── */
+
+/* The question this strip answers at a glance is "do I need to switch accounts,
+   and to which?", so the verdict leads on the left and the per-account meters
+   support it on the right. Directly above the focus band because the two answer
+   the same question at different scales: this says which account to work in,
+   the band says what the work is. */
+.usage { height: var(--usage-h); }
+
+/* Collapse in place rather than dropping out of the grid, exactly the
+   warnstrip mechanism below: with display:none the section's auto-placement
+   marker goes with it, the band slides up into the auto track and main lands
+   in the 176px band track. A zero-height box keeps every other row where it
+   belongs while the auto track sizes to nothing. */
+.usage[hidden] {
+  display: block;
+  height: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+}
+
+.usage-body { display: flex; align-items: stretch; overflow: hidden; }
+
+/* One fixed-width cell, echoing the hero column in the band below: the answer
+   occupies the same visual slot at both scales. 16px, under the focus line's
+   19px — loud, but the focus line stays the largest text on the board. The
+   line is an email address, so it keeps its case: uppercasing a label the
+   operator typed reads as a different string. */
+.uverdict {
+  flex: 0 0 auto;
+  width: 320px;
+  min-width: 0;
+  padding: 8px 16px 9px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.uverdict-eyebrow {
+  margin: 0 0 5px;
+  font: 9px/1 var(--mono);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+/* Amber eyebrows are the two states that carry an instruction. */
+.uverdict.is-switch .uverdict-eyebrow,
+.uverdict.is-spent .uverdict-eyebrow { color: var(--amber); }
+.uverdict-line {
+  margin: 0;
+  font: 16px/1.15 var(--mono);
+  letter-spacing: .01em;
+  color: var(--bone);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The switch target is the one action the strip ever asks for: the accent. */
+.uverdict.is-switch .uverdict-line { color: var(--orange); }
+/* Over a threshold but still the best available: the advice is stay, the
+   colour says watch it. */
+.uverdict.is-hot .uverdict-line { color: var(--amber); }
+.uverdict.is-spent .uverdict-line { color: var(--amber); text-transform: uppercase; }
+.uverdict-sub {
+  margin: 6px 0 0;
+  font: 9px/1.4 var(--mono);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The accounts: equal cells split by hairlines, like the header readout. */
+.uaccts { flex: 1 1 auto; display: flex; min-width: 0; }
+.uacct {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 8px 14px 9px;
+  border-left: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+/* A spent account is still stated — its reset says when it frees — but at
+   half weight, because nothing about it is actionable right now. */
+.uacct.is-spent { opacity: .45; }
+
+.uacct-head { display: flex; align-items: baseline; gap: 8px; }
+.uacct-label {
+  min-width: 0;
+  font: 10px/1 var(--mono);
+  letter-spacing: .1em;
+  color: var(--bone);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Identity chips name what they mark. The first version gave the pick an
+   orange inset edge instead, and the edge read as a divider BETWEEN cells —
+   the operator asked why only some cells had separators (2026-08-12). */
+.uchip {
+  flex: 0 0 auto;
+  padding: 2px 4px;
+  border: 1px solid var(--rule-hot);
+  font: 8px/1 var(--mono);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.uchip.is-target { color: var(--orange); border-color: var(--orange-dim); }
+/* The one freshness claim, stated only when the figures are not fresh. */
+.uchip.is-stale { color: var(--amber); border-color: var(--amber); }
+
+/* Bars would be invented numbers for an account that is not reporting, so the
+   cell names the state instead. */
+.uacct-chip {
+  align-self: flex-start;
+  margin-top: 7px;
+  padding: 3px 5px;
+  border: 1px solid var(--amber);
+  font: 10px/1 var(--mono);
+  letter-spacing: .13em;
+  text-transform: uppercase;
+  color: var(--amber);
+}
+
+/* One labeled row per window: key, bar, figure, reset. The key is what makes
+   the rows unambiguous — unlabeled, the first two rows read as duplicates
+   (operator report, 2026-08-12). 5H is the session, 7D the week, FAB the
+   Fable weekly window where the plan reports one. */
+.urows { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
+.urow { display: flex; align-items: center; gap: 8px; }
+.urow-k {
+  flex: 0 0 3.2ch;
+  font: 8px/1 var(--mono);
+  letter-spacing: .12em;
+  color: var(--dim);
+}
+.urow-v {
+  flex: 0 0 4ch;
+  text-align: right;
+  font: 11px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--bone);
+}
+/* Past the switch threshold the figure itself goes amber: that row is the
+   reason for whatever the verdict is saying. */
+.urow-v.is-hot { color: var(--amber); }
+.urow-r {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font: 8px/1 var(--mono);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+/* Two weights of the same instrument. The session bar is the vitals' square
+   well grown to 8px; the weekly buckets are the bare 3px track. Both fills
+   stay --dim: consumption is a neutral fact, and the amber for "running hot"
+   belongs to the figure and the pace warning, not to a bar that would cry it
+   on every cell. */
+.ubar5 {
+  position: relative;
+  display: block;
+  height: 8px;
+  flex: 1 1 auto;
+  border: 1px solid var(--rule-hot);
+}
+.ubar5 i { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--dim); }
+.ubar7 { display: block; height: 3px; flex: 1 1 auto; background: var(--rule); overflow: hidden; }
+.ubar7 i { display: block; height: 100%; width: 0; background: var(--dim); }
+/* The strip's one amber text on a row: the reading is fine NOW, and the
+   projection is what says it will not stay that way. */
+.urow-r.is-cap { color: var(--amber); }
+
+.uacct-extra {
+  font: 8px/1 var(--mono);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 
 /* ── answer band: focus | hero ──────────────────────────────────────────── */
 

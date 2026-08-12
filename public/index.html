@@ -118,6 +118,31 @@
   <span class="vit-hot" id="v-hot"></span>
 </section>
 
+<!-- Claude subscription usage, directly on top of the focus band because the
+     two answer the same question at different scales: this strip says which
+     account to work in, the band says what the work is. The verdict leads on
+     the left and the per-account bars support it on the right — the panel is
+     read once, at the moment a session starts, so the answer is the biggest
+     thing in it. Hidden whenever State carries no usage object: an unenrolled
+     machine has nothing to show, and an absent usage.json is normal. -->
+<section class="panel usage" id="p-usage" hidden>
+  <div class="phead">
+    <span class="lab">CLAUDE USAGE</span>
+    <span class="rule-fill"></span>
+    <span class="phead-meta" id="usage-meta"></span>
+  </div>
+  <div class="pbody usage-body">
+    <div class="uverdict" id="u-verdict">
+      <p class="uverdict-eyebrow" id="u-verdict-eyebrow"></p>
+      <p class="uverdict-line" id="u-verdict-line">—</p>
+      <p class="uverdict-sub" id="u-verdict-sub"></p>
+    </div>
+    <!-- One cell per enrolled account, built by renderUsage. The slots are
+         dynamic (enrollment is user data), unlike the verdict's fixed spans. -->
+    <div class="uaccts" id="u-accounts"></div>
+  </div>
+</section>
+
 <div class="band">
   <section class="panel focus" id="p-focus">
     <div class="phead">

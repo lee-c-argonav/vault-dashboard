@@ -20,6 +20,7 @@ import { loadShortcuts, publicShortcuts, runShortcut } from './shortcuts.js';
 import { startMetrics, stopMetrics, currentMetrics } from './metrics.js';
 import { focusRunTerminal, focusSessionTerminal, RUN_PREFIX, SESSION_PREFIX } from './run-terminal.js';
 import { startPublishing, stopPublishing, publishStatus } from './publish.js';
+import { startUsagePoller } from './usage-poller.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -90,6 +91,7 @@ function bootState() {
     // boot state and every consumer sees one shape.
     runs: [],
     sessions: [],
+    usage: null,
     health: {
       notes: 0,
       links: 0,
@@ -563,6 +565,9 @@ const WATCHERS = [
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 let shuttingDown = false;
+/** The usage poller's handle, assigned in the listen callback. Stopped in
+ *  shutdown like every other timer this process arms. */
+let usagePoller = null;
 
 function shutdown(signal) {
   if (shuttingDown) return;
@@ -580,6 +585,7 @@ function shutdown(signal) {
   }
   stopMetrics();
   stopPublishing();
+  usagePoller?.stop();
   for (const res of clients) res.end();
   clients.clear();
   for (const res of metricClients) res.end();
@@ -665,6 +671,13 @@ server.listen(PORT, HOST, () => {
   // daemon that no longer existed. That is the duplicate-daemon case the exit
   // guard above was added for, arriving through a door beside it.
   const publishing = startPublishing((line) => process.stderr.write(line));
+  // The usage poller starts here, after the port is held, for exactly the reason
+  // publishing does: a duplicate daemon that loses the race must exit before it
+  // spawns work, and a poller that got started early would keep writing
+  // usage.json for nobody. It rewrites that file atomically every 300s; the 10s
+  // safety re-parse picks each write up, so no fs.watch is added for it (the
+  // data dir is outside the vault watch anyway).
+  usagePoller = startUsagePoller({ log: (line) => process.stderr.write(line) });
   process.stdout.write(
     `[vault-hud] http://${HOST}:${PORT} · vault ${VAULT} · ` +
       `${current.health.notes} notes · ${shortcutCount} shortcuts · ` +

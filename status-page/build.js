@@ -1,4 +1,5 @@
-// status-page/build.js — render 15-Runs into one self-contained HTML file.
+// status-page/build.js — render 15-Runs and usage.json into one self-contained
+// HTML file.
 //
 // Same data and the same derivation as the HUD: runs-view.js is imported, never
 // reimplemented, so the desktop and the phone cannot disagree about whether a
@@ -20,6 +21,8 @@ import { homedir } from 'node:os';
 import { readRunsDetailed, readFinishedRunsDetailed } from '../runs.js';
 import { readSessions } from '../sessions.js';
 import { readTranscripts } from '../transcripts.js';
+import { readUsage, usageDataDir } from '../usage.js';
+import { usageView, USAGE_STALE_MS, SWITCH_SESSION_PCT, SWITCH_WEEK_PCT } from '../public/usage-view.js';
 import {
   LABEL, runState, stateText, durationOf, unitWindow, expandSet, askOf, quietMs,
   elapsedText, humanMs, counts, partitionRuns, linkSessions, batchStamped,
@@ -137,6 +140,16 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
  *
  * WHAT SURVIVES is the answer to "does anything need me": state, counts, and
  * how long since something moved.
+ *
+ * USAGE, same doctrine. usage.json carries no secrets by schema: the OAuth
+ * tokens live in usage-tokens.json, which this path never opens. Identity is
+ * NOT published: the account label is operator free text, and the first real
+ * labels were email addresses, which the publish scan caught on 2026-08-12.
+ * The projection drops the label and the section renders the enrollment id.
+ * What the projection otherwise cuts is movement, not identity: percentages are
+ * rounded and timestamps bucketed, because the digest below keys off this
+ * projection and a field that drifts by fractions of a point every poll would
+ * deploy every tick without the page ever saying anything new.
  */
 export function toPublicBoard(board, now) {
   // Idempotent: a second pass over an already-projected board reads the counts
@@ -224,6 +237,60 @@ export function toPublicBoard(board, now) {
     ...etaOf(s),
   } : null);
 
+  /**
+   * Claude subscription usage, coarsened for publication.
+   *
+   * Whole percentages and five-minute buckets, for the same reason
+   * `silentBucket` exists: the digest keys off this projection, so a field that
+   * moves a little on every poll — 42.4 becoming 42.6, a resets-at read to the
+   * second — would fire a deploy every tick while changing nothing anyone acts
+   * on. Floored, not rounded-to-nearest, so the value is stable within a bucket
+   * and moves exactly once across one. Idempotent by construction: rounding a
+   * whole number and bucketing a bucketed stamp are both fixed points, so a
+   * second pass over an already-projected board reads what the first produced,
+   * the agentsOut/agentsTotal precedent.
+   *
+   * `fetchedAt` is dropped outright. It advances on every poll even when
+   * nothing else does, so carrying it would make every poll a deploy; the
+   * staleness the phone needs to disclose is a property of the file, and the
+   * board-level `updated` says it.
+   */
+  const usage = (u) => {
+    if (!u || typeof u !== 'object') return null;
+    const BUCKET = 5 * 60_000;
+    const bucket = (iso) => {
+      const t = Date.parse(iso);
+      return Number.isFinite(t) ? new Date(Math.floor(t / BUCKET) * BUCKET).toISOString() : null;
+    };
+    const pct = (n) => (typeof n === 'number' && Number.isFinite(n) ? Math.round(n) : null);
+    const span = (w) => (w && typeof w === 'object'
+      ? { utilization: pct(w.utilization), resetsAt: bucket(w.resetsAt) }
+      : null);
+    return {
+      updated: bucket(u.updated),
+      // Which account the CLI is on. The id is the enrollment handle, safe to
+      // publish; the verdict needs it to say "stay" versus "switch".
+      currentAccountId: typeof u.currentAccountId === 'string' && u.currentAccountId
+        ? u.currentAccountId : null,
+      accounts: (Array.isArray(u.accounts) ? u.accounts : [])
+        .filter((a) => a && typeof a === 'object')
+        .map((a) => ({
+          id: a.id ?? '',
+          // No `label`: it is operator free text and the first real ones were
+          // email addresses, which the publish scan caught. The phone renders
+          // the enrollment id; labels stay on the loopback desktop.
+          plan: a.plan ?? '',
+          state: a.state ?? 'error',
+          error: a.error ?? null,
+          fiveHour: span(a.fiveHour),
+          sevenDay: span(a.sevenDay),
+          sevenDayOpus: span(a.sevenDayOpus),
+          sevenDaySonnet: span(a.sevenDaySonnet),
+          sevenDayFable: span(a.sevenDayFable),
+        })),
+    };
+  };
+
   const run = (r) => ({
     runId: r.runId,
     project: r.project,
@@ -243,7 +310,7 @@ export function toPublicBoard(board, now) {
   return {
     // EXPLICIT, not `...board`. A spread makes the allowlist partial: any field
     // readBoard grows tomorrow rides to the page unprojected, which is the one
-    // way this boundary fails silently. Four fields is the whole board.
+    // way this boundary fails silently. Five fields is the whole board.
     skipped: board.skipped ?? 0,
     active: (board.active ?? []).map(run),
     finished: (board.finished ?? []).map(run),
@@ -253,6 +320,7 @@ export function toPublicBoard(board, now) {
     unpublished: (board.unpublished ?? [])
       .filter(Boolean)
       .map((s) => ({ ...session(s), context: s.context ?? '' })),
+    usage: usage(board.usage),
   };
 }
 
@@ -310,6 +378,13 @@ export async function readBoard(vaultPath, injectedSessions, now = null) {
     context: now === null ? '' : sessionContext(s, context, now),
     ...(observed.get(s.pid) ?? {}),
   }));
+  // Claude subscription usage, from the data directory rather than the vault.
+  // readUsage treats a missing file as the normal not-enrolled state and an
+  // unparseable one as `broken` with a null usage, so neither can take down a
+  // build the way an unreadable vault can; both simply leave the section off
+  // the page. The projection strips movement (and could carry nothing private:
+  // usage.json holds no tokens by schema).
+  const { usage } = await readUsage(usageDataDir());
   return {
     active: linked.runs,
     finished,
@@ -317,6 +392,7 @@ export async function readBoard(vaultPath, injectedSessions, now = null) {
     // Both folders. A corrupt file in the archive is as invisible as one in
     // 15-Runs and earns the same line in the footer.
     skipped: skipped + archive.skipped,
+    usage,
   };
 }
 
@@ -342,7 +418,7 @@ export function boardDigest(rawBoard, now = null) {
   // volatile set and the privacy set are the same cut" one function's property
   // rather than a promise: a field that cannot be published cannot move the
   // digest, and a field that can is bucketed by the same code that publishes it.
-  const { active, finished, unpublished, skipped = 0 } =
+  const { active, finished, unpublished, skipped = 0, usage } =
     toPublicBoard(rawBoard, now ?? Date.now());
   // How silent a run is, coarsely.
   //
@@ -389,6 +465,21 @@ export function boardDigest(rawBoard, now = null) {
       u.agents.map((a) => [a.label, a.state, a.started, a.ended])]),
     r.needsInput.map((n) => [n.question, n.since]),
     r.blockers.map((b) => [b.what, b.since])];
+  // Whether the usage data has stopped moving, coarsely.
+  //
+  // Same defect class as `silence` above, and the reason a bucketed `updated`
+  // alone cannot carry it: the projection is a pure function of the file, so a
+  // poller that STOPS WRITING freezes its bucket and the digest with it — no
+  // deploy fires, and the phone would go on showing the last quotas as if
+  // fresh. Staleness is clock-derived, so it is hashed as its own coarsened
+  // term: 0 while the data is inside the view's stale threshold, 1 past it.
+  // Binary rather than a ladder because the page renders the note as a floor
+  // claim ("STALE ≥15m"), so a finer bucket would fire deploys that change
+  // nothing anyone can read.
+  const usageStale = () => {
+    if (now === null || !usage?.updated) return 0;
+    return now - Date.parse(usage.updated) > USAGE_STALE_MS ? 1 : 0;
+  };
   return createHash('sha256').update(JSON.stringify({
     active: active.map((r) => [run(r), silence(r)]),
     finished: finished.map(run),
@@ -410,6 +501,12 @@ export function boardDigest(rawBoard, now = null) {
       s.name, s.since, s.status, s.silentBucket, s.agentsOut, s.agentsTotal, s.agentsCapped,
       s.etaMins, s.etaOver, s.context,
     ]),
+    // The projected usage, hashed whole: every field in it is already rounded
+    // or bucketed by the same code that publishes it, so the digest cannot
+    // churn on sub-decision movement — but it must move when a percentage, an
+    // account state or the poll stamp actually changes, or the phone would
+    // show last poll's quotas indefinitely.
+    usage: usage ? [usage, usageStale()] : null,
   })).digest('hex');
 }
 
@@ -630,6 +727,29 @@ footer{margin-top:30px;font:11px/1.5 var(--mono);color:var(--dim);
 .hm{font:11px/1.4 var(--mono);font-variant-numeric:tabular-nums;color:var(--text-3);
     white-space:nowrap;text-align:right}
 .hsub{grid-column:1/-1;font:11px/1.45 var(--mono);color:var(--text-3)}
+
+/* Claude subscription usage. The section answers "which account do I use", so
+   the verdict leads and the per-account rows are the evidence under it, each
+   one line: enrollment id, the two quotas, a chip only when the account is not
+   usable. Sits above the runs because the answer is wanted before the board,
+   not after it. Same panel family as a run card, without the state edge: an
+   account in trouble is marked on its own row, not on the whole section. */
+.quota{border:1px solid var(--rule-hot);background:var(--panel);
+       padding:12px 16px;margin:0 0 18px}
+.qrec{font:600 15px/1.4 var(--sans);color:var(--bone);margin:0;overflow-wrap:anywhere}
+.qrec b{color:var(--orange);font-weight:600}
+.qrec .qchip{margin-left:8px;vertical-align:2px}
+.qrow{display:flex;align-items:baseline;gap:10px;padding:5px 0;
+      border-top:1px solid var(--rule)}
+.qrec + .qrow{margin-top:7px}
+.qlab{flex:1 1 auto;min-width:0;font:13px/1.4 var(--sans);color:var(--bone);
+      overflow-wrap:anywhere}
+.qnum{flex:0 0 auto;font:11px/1.4 var(--mono);font-variant-numeric:tabular-nums;
+      letter-spacing:.04em;color:var(--text-3);white-space:nowrap}
+/* The one warm mark in the section: an account that cannot be used, or data
+   too old to act on. Amber, matching the blocked/failed encoding elsewhere. */
+.qchip{flex:0 0 auto;font:9px/1 var(--mono);letter-spacing:.12em;color:var(--amber);
+       border:1px solid var(--amber);padding:3px 5px;white-space:nowrap}
 `;
 
 function unitRows(units, now) {
@@ -747,6 +867,86 @@ function ranFor(r) {
 }
 
 /**
+ * Claude subscription usage: which account to be on, then the evidence.
+ *
+ * Verdict-first, the same content the desktop leads with: the stay/switch
+ * verdict comes before any number, because that is the question this section
+ * exists to answer. The view (usage-view.js, imported — never reimplemented)
+ * owns every derivation: the thresholds, the burn-rate cap projection, the
+ * stale verdict. This function only decides how the answer reads on a phone.
+ *
+ * Hidden entirely when there is nothing to say: no usage.json, an unreadable
+ * one, or zero accounts enrolled. An absent section is the normal state of a
+ * machine that never enrolled, not an error worth a line on the page.
+ *
+ * Reset times are clock times, not deltas, and that is deliberate in both
+ * directions: a resets-at is a fixed instant from the API (a fact, so the AT
+ * claim `clockAt` makes is honest), where the cap projection is an estimate —
+ * and an estimate printed as a clock on a page rebuilt only when the digest
+ * moves would outlive itself, the finishClock doctrine. The projection buckets
+ * every stamp to five minutes, so no clock printed here can claim a precision
+ * the deploy cadence cannot keep.
+ */
+function usageSection(usage, now) {
+  const view = usageView(usage, now);
+  if (!view || !view.accounts.length) return '';
+  // A floor claim, not the age: the page rebuilds only when the digest moves,
+  // so a precise minute count would freeze mid-lie. The threshold is the one
+  // thing that can be claimed truthfully at any age, and `≥` is the floor
+  // marker everywhere on this page.
+  const stale = view.isStale
+    ? `<span class="qchip" title="poll data older than ${USAGE_STALE_MS / 60_000}m">STALE ≥${USAGE_STALE_MS / 60_000}m</span>`
+    : '';
+  // Everywhere a name is printed it is the enrollment id, never the label:
+  // the projection strips labels because they are operator free text and the
+  // first real ones were email addresses. The id is the handle the operator
+  // chose as `acct1`-style at enrollment, and the publish scan is the backstop
+  // if a future id is itself identifying.
+  const v = view.verdict;
+  const pct = (n) => (n === null || n === undefined ? '—' : `${n}%`);
+  const quotas = (a) => `5h ${pct(a.fiveHourPct)} · 7d ${pct(a.sevenDayPct)}`;
+  let verdict;
+  if (v.kind === 'stay') {
+    // The calm case: the account in use has headroom, so no action word —
+    // a switch is only worth showing past the view's thresholds.
+    verdict = `<b>${esc(v.current.id)}</b> is fine · ${esc(quotas(v.current))}`
+      + (v.currentHot ? ' · over the line, still the best headroom' : '');
+  } else if (v.kind === 'switch') {
+    const over = [];
+    if (v.current.fiveHourPct != null && v.current.fiveHourPct >= SWITCH_SESSION_PCT)
+      over.push(`${Math.round(v.current.fiveHourPct)}% session`);
+    if (v.current.sevenDayPct != null && v.current.sevenDayPct >= SWITCH_WEEK_PCT)
+      over.push(`${Math.round(v.current.sevenDayPct)}% week`);
+    verdict = `Switch to <b>${esc(v.target.id)}</b> · ${esc(v.current.id)} at ${esc(over.join(' · ') || 'the line')}`;
+  } else if (v.kind === 'best') {
+    verdict = `Best headroom: <b>${esc(v.target.id)}</b> · ${esc(quotas(v.target))}`;
+  } else {
+    // Every usable account is capped, so the answer becomes when one frees.
+    // nextFree is the earliest 5h reset still in the future; a clock time,
+    // same reasoning as the row resets.
+    const frees = v.nextFree
+      ? ` · ${esc(v.nextFree.id)} frees ${esc(clockAt(v.nextFree.at, now)) || 'soon'}`
+      : '';
+    verdict = `All accounts spent${frees}`;
+  }
+  const rows = view.accounts.map((a) => {
+    const reset = a.fiveHourResetsAt ? clockAt(a.fiveHourResetsAt, now) : '';
+    const chip = a.state === 'ok' ? ''
+      : `<span class="qchip"${a.error ? ` title="${esc(a.error)}"` : ''}>${
+          esc(a.state.replace(/_/g, ' ').toUpperCase())}</span>`;
+    const current = view.currentId === a.id && a.id ? '<span class="qchip">CURRENT</span>' : '';
+    return `<div class="qrow">` +
+      `<span class="qlab">${esc(a.id)}</span>${chip}${current}` +
+      `<span class="qnum">5h ${pct(a.fiveHourPct)}${reset ? ` ↻ ${esc(reset)}` : ''}</span>` +
+      `<span class="qnum">7d ${pct(a.sevenDayPct)}</span>` +
+      (a.fablePct != null ? `<span class="qnum">fab ${pct(a.fablePct)}</span>` : '') +
+      `</div>`;
+  }).join('');
+  return `<section class="quota" aria-label="Claude subscription usage">` +
+    `<p class="qrec">${verdict}${stale}</p>${rows}</section>`;
+}
+
+/**
  * Sessions that are alive and publishing nothing.
  *
  * The phone gets these for the same reason the desktop does: without them a
@@ -854,7 +1054,7 @@ export async function build(opts = {}) {
   // Projected before anything is rendered. build() never holds an object
   // carrying a branch, a tool name, a path or a sub-agent label, so the page
   // cannot leak one by a template picking up a new field.
-  const { active, finished, unpublished, skipped } =
+  const { active, finished, unpublished, skipped, usage } =
     toPublicBoard(await readBoard(vault, opts.sessions, now), now);
 
   // The same census the desktop's ATTN instrument renders, computed from the
@@ -939,6 +1139,7 @@ ${(active.length || unpublished.length) ? `<div class="legend" role="group" aria
   <span><b class="k-dur">+5m</b>still running</span>
   <span><b class="k-dur done">5m</b>took that long</span>
 </div>` : ''}
+${usageSection(usage, now)}
 ${body}
 ${sessionSection(unpublished, now)}
 ${historySection(finished, now)}

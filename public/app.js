@@ -9,6 +9,10 @@
 import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText, sessionActivity, mergedRank, attentionModel, attentionCaption, agentEta, contextBreakdown, clockAt, finishClock, goalEta, goalEtaText, fanoutGantt, contextOf, countAsOf }
   from './runs-view.js';
 
+// The usage strip's whole derivation, shared with the phone build so the two
+// surfaces always name the same account. Same rationale as runs-view.js above.
+import { usageView, SWITCH_SESSION_PCT, SWITCH_WEEK_PCT } from './usage-view.js';
+
 const STATE_SOURCES = ['/api/state'];
 
 const $ = (id) => document.getElementById(id);
@@ -127,6 +131,199 @@ function renderHeader(state) {
     node.className = 'cell-v' + (value === 0 ? ' zero' : hotWhenSet ? ' hot' : '');
   }
   flashIfChanged($('p-head'), cells.map((c) => c[1]));
+}
+
+// ── claude accounts: stay, or switch to which ────────────────────────────────
+
+let usageSig = null;
+
+const usagePct = (v) => (v != null ? `${Math.round(v)}%` : '--');
+
+/** One labeled meter row: the key, the bar, the figure, then the reset. */
+function usageRow(key, valuePct, barCls, hot, rightText, rightTitle, rightCls) {
+  const row = el('div', 'urow');
+  row.append(el('span', 'urow-k', key));
+  const bar = el('span', barCls);
+  const fill = el('i');
+  fill.style.width = `${Math.max(0, Math.min(100, valuePct ?? 0))}%`;
+  bar.append(fill);
+  row.append(bar);
+  row.append(el('span', 'urow-v' + (hot ? ' is-hot' : ''), usagePct(valuePct)));
+  const right = el('span', `urow-r${rightCls ? ` ${rightCls}` : ''}`, rightText || '');
+  if (rightTitle) right.title = rightTitle;
+  row.append(right);
+  return row;
+}
+
+/** A weekly reset reads as a weekday; a five-day countdown helps nobody. */
+function usageDayAt(iso) {
+  const d = new Date(iso);
+  return Number.isFinite(d.getTime())
+    ? d.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase() : '';
+}
+
+/**
+ * One cell per account. The head carries the label and the identity chips —
+ * CURRENT for the profile the CLI is on, TARGET for the account the verdict
+ * points at. Never a coloured edge: the first version marked the pick with an
+ * orange inset border and it read as a divider BETWEEN cells (operator report,
+ * 2026-08-12). Bars exist only while the account is reporting: for an expired
+ * or erroring one the chip names what is actually known, because drawing a
+ * bar from nothing would invent a figure.
+ */
+function usageCell(a, view, now) {
+  const isCurrent = Boolean(a.id) && view.currentId === a.id;
+  const isTarget = Boolean(a.id) && view.verdict.target?.id === a.id
+    && (view.verdict.kind === 'switch' || view.verdict.kind === 'best');
+  const cell = el('div', 'uacct' + (a.spent5h ? ' is-spent' : ''));
+
+  const head = el('div', 'uacct-head');
+  const label = el('span', 'uacct-label', a.label || '—');
+  label.title = a.plan ? `${a.label} · ${a.plan}` : a.label;
+  head.append(label);
+  if (isCurrent) head.append(el('span', 'uchip', 'current'));
+  if (isTarget) head.append(el('span', 'uchip is-target', 'target'));
+  cell.append(head);
+
+  if (a.state !== 'ok') {
+    const chip = el('span', 'uacct-chip', a.state === 'auth_expired' ? 'auth expired' : 'error');
+    chip.title = a.error || 'The poller could not fetch this account.';
+    cell.append(chip);
+    return cell;
+  }
+
+  const rows = el('div', 'urows');
+  // 5H, the session row: a thick bar, the percentage, and the reset as a
+  // countdown. A pace warning that the window caps early outranks the
+  // countdown and takes its slot.
+  let fiveRight = 'reset --';
+  let fiveTitle = '';
+  const left = a.fiveHourResetsAt != null ? Date.parse(a.fiveHourResetsAt) - now : null;
+  if (left != null && left > 0) fiveRight = `reset ${humanMs(left)}`;
+  if (a.capAt) {
+    fiveRight = `caps ${clockAt(a.capAt, now)}`;
+    fiveTitle = 'At the current burn rate the five-hour window reaches 100% at this time.';
+  }
+  rows.append(usageRow('5H', a.fiveHourPct, 'ubar5',
+    a.fiveHourPct != null && a.fiveHourPct >= SWITCH_SESSION_PCT, fiveRight, fiveTitle,
+    a.capAt ? 'is-cap' : ''));
+  rows.append(usageRow('7D', a.sevenDayPct, 'ubar7',
+    a.sevenDayPct != null && a.sevenDayPct >= SWITCH_WEEK_PCT,
+    a.sevenDayResetsAt ? `reset ${usageDayAt(a.sevenDayResetsAt)}` : ''));
+  // Fable rides its own weekly window, shown only when the account reports
+  // one: an always-on slot would sit empty on most plans and read as broken.
+  if (a.fablePct != null) {
+    rows.append(usageRow('FAB', a.fablePct, 'ubar7', a.fablePct >= SWITCH_WEEK_PCT,
+      a.fableResetsAt ? `reset ${usageDayAt(a.fableResetsAt)}` : '', 'Fable weekly window'));
+  }
+  const extra = [];
+  if (a.opusPct != null) extra.push(`opus ${usagePct(a.opusPct)}`);
+  if (a.sonnetPct != null) extra.push(`sonnet ${usagePct(a.sonnetPct)}`);
+  if (extra.length) rows.append(el('div', 'uacct-extra', extra.join(' · ')));
+  cell.append(rows);
+  return cell;
+}
+
+/**
+ * The verdict cell, four kinds. stay: the current account is fine, so the
+ * email shown is the one already in use and no action word appears — the
+ * operator's rule is that a switch is only worth showing past 80% of the
+ * session or 90% of the week. switch: the current account is over one of
+ * those lines and the target is the strongest account with both buckets
+ * available. best: the current profile could not be matched, so the strongest
+ * account is named without a stay/switch framing. spent: nothing has both
+ * buckets; the earliest reset answers when one frees.
+ *
+ * Unguarded at the call site for the same reason renderRuns is — countdowns
+ * derive from the wall clock, not from State, so identical State must still
+ * repaint them. The DOM write is signature-guarded inside, with the clock in
+ * the signature at minute granularity: an unchanged minute costs no rebuild
+ * and cannot tear a text selection.
+ */
+function renderUsage(state) {
+  const panel = $('p-usage');
+  const now = Date.now();
+  const view = usageView(state.usage ?? null, now);
+  if (!view) {
+    // Hidden, not emptied: an unenrolled machine has nothing to show, and the
+    // grid track collapses with the section (see --usage-h in hud.css). The
+    // signature resets so a strip that reappears rebuilds rather than diffing
+    // against a board that was never drawn.
+    panel.hidden = true;
+    usageSig = null;
+    return;
+  }
+  panel.hidden = false;
+
+  const sig = JSON.stringify([
+    view.updated, view.isStale, view.staleMinutes, view.currentId, view.verdict,
+    view.accounts.map((a) => [a.id, a.state, a.error, a.fiveHourPct, a.fiveHourResetsAt,
+      a.sevenDayPct, a.opusPct, a.sonnetPct, a.fablePct, a.spent5h, a.capAt]),
+    Math.floor(now / 60_000),
+  ]);
+  if (sig !== usageSig) {
+    usageSig = sig;
+
+    const v = view.verdict;
+    const box = $('u-verdict');
+    const eyebrow = $('u-verdict-eyebrow');
+    const line = $('u-verdict-line');
+    const sub = $('u-verdict-sub');
+    const quotas = (a) => `5h ${usagePct(a.fiveHourPct)} · 7d ${usagePct(a.sevenDayPct)}`;
+    box.className = `uverdict is-${v.kind}` + (v.currentHot ? ' is-hot' : '');
+    if (v.kind === 'stay') {
+      eyebrow.textContent = 'CURRENT';
+      line.textContent = v.current.label;
+      line.title = v.current.label;
+      sub.textContent = v.currentHot
+        ? `over the line, still the best headroom · ${quotas(v.current)}`
+        : quotas(v.current);
+    } else if (v.kind === 'switch') {
+      const over = [];
+      if (v.current.fiveHourPct != null && v.current.fiveHourPct >= SWITCH_SESSION_PCT)
+        over.push(`${Math.round(v.current.fiveHourPct)}% session`);
+      if (v.current.sevenDayPct != null && v.current.sevenDayPct >= SWITCH_WEEK_PCT)
+        over.push(`${Math.round(v.current.sevenDayPct)}% week`);
+      eyebrow.textContent = 'SWITCH TO';
+      line.textContent = v.target.label;
+      line.title = v.target.label;
+      sub.textContent = over.length
+        ? `${v.current.label} at ${over.join(' · ')}`
+        : `${v.current.label} is ${v.current.state.replace('_', ' ')}`;
+      sub.title = sub.textContent;
+    } else if (v.kind === 'best') {
+      eyebrow.textContent = 'BEST HEADROOM';
+      line.textContent = v.target.label;
+      line.title = v.target.label;
+      sub.textContent = quotas(v.target);
+    } else {
+      eyebrow.textContent = 'ALL SPENT';
+      line.textContent = v.nextFree ? v.nextFree.label : 'NO RESET IN SIGHT';
+      line.title = 'Every account is used up';
+      sub.textContent = v.nextFree
+        ? `frees in ${humanMs(Date.parse(v.nextFree.at) - now)}` : '';
+    }
+
+    $('u-accounts').replaceChildren(...view.accounts.map((a) => usageCell(a, view, now)));
+
+    // The one freshness claim, stated only when the figures are not fresh: the
+    // poller writes every five minutes, so past fifteen these are its last
+    // write, not a current reading.
+    const meta = $('usage-meta');
+    if (view.isStale) {
+      const chip = el('span', 'uchip is-stale',
+        view.staleMinutes != null ? `stale ${view.staleMinutes}m` : 'stale');
+      chip.title = "usage.json has not been rewritten in that long; these are the poller's last figures.";
+      meta.replaceChildren(chip);
+    } else {
+      meta.replaceChildren();
+    }
+  }
+
+  // The minute bucket is deliberately NOT in this signature: a countdown
+  // ticking over is not a change worth flashing the panel for.
+  flashIfChanged(panel, [view.updated, view.verdict.kind, view.verdict.target?.id ?? '',
+    view.accounts.map((a) => `${a.id}${a.state}${a.fiveHourPct}${a.sevenDayPct}`).join(',')]);
 }
 
 // ── focus + load gauge ───────────────────────────────────────────────────────
@@ -1455,6 +1652,9 @@ function renderLattice(state) {
 
 function render(state) {
   renderHeader(state);
+  // Unguarded, like renderRuns: usage carries no clock in State, so identical
+  // State must still repaint the strip or its countdowns freeze between polls.
+  renderUsage(state);
   renderFocus(state);
   renderHero(state);
   // Deliberately not guarded by diff(): runs carry no clock value, so a run that

@@ -30,6 +30,9 @@ built-ins only. If a feature needs `npm install`, it is out of scope.
         │  fs.watch(recursive) → 150ms debounce
         ▼
   parse.js          markdown → State (pure, no I/O beyond reading)
+        ▲           also reads usage.json from the data dir on every parse
+        │           (rewritten atomically by usage-poller.js every 300s)
+  data dir ($VAULT_HUD_DATA_DIR)
         │
         ▼
   server.js         127.0.0.1:5959
@@ -50,6 +53,8 @@ already live.
 ```
 server.js                 http + SSE + fs.watch
 parse.js                  markdown → State
+usage.js                  usage.json → normalized accounts, whitelisted fields
+usage-poller.js           OAuth usage poll → data dir, started with the server
 metrics.js                machine vitals, sampled on a timer
 public/index.html         layout shell
 public/hud.css            theme
@@ -73,6 +78,12 @@ docs/fixture.json         real parsed State, committed, for frontend work
   `$VAULT_HUD_VAULT`). Port from `VAULT_HUD_PORT` (default `5959`).
   Static root from `VAULT_HUD_PUBLIC` (default `./public`, resolved against the
   repo root so `VAULT_HUD_PUBLIC=candidates/b` works from any cwd).
+- The data dir holds the two usage files: `usage-tokens.json` (OAuth tokens,
+  mode 0600 — read only by `usage-poller.js` and the enrollment CLI, never
+  served, never on State) and `usage.json` (public-safe, normalized into State).
+  Path from `VAULT_HUD_DATA_DIR` (default `~/Library/Application Support/
+  vault-hud`). The poller writes here, never to the vault, so the read-only
+  claim above stays exact.
 
 ## Scanning scope
 
@@ -81,6 +92,10 @@ docs/fixture.json         real parsed State, committed, for frontend work
 
 **Excluded:** `99-Archive`, `_to_delete`, `.agents`, `.obsidian`, `.git`,
 `node_modules`, and any dotfile directory.
+
+Subscription usage is never scanned: `usage.json` is read from the data dir,
+not the vault, on every parse. See "Subscription usage" under "The State
+object".
 
 **Before extracting anything**, each file is preprocessed:
 
@@ -173,6 +188,32 @@ The single contract between `parse.js`, `server.js`, and `app.js`.
       "where": "work/sprocket", "since": "2026-08-09T19:33:40.000Z" }
   ],
 
+  // Claude subscription usage, normalized by usage.js from the data dir's
+  // usage.json. Same rules as runs: whitelisted fields, and NO clock-derived
+  // values — staleness, the burn-rate projection and the stay/switch verdict
+  // are derived in public/usage-view.js, which both surfaces import. null when
+  // no usage.json exists (normal before enrollment) or when it is present but
+  // unparseable (which also raises a warnings entry). See "Subscription usage"
+  // below.
+  "usage": {
+    "updated": "2026-08-12T15:04:00.000Z",
+    // Which enrolled account the default CLI profile is signed into, matched
+    // by account uuid at poll time — never by token string, because the CLI
+    // and the poller refresh their own copies and the strings diverge. null
+    // means unknown, not "none".
+    "currentAccountId": "a1",
+    "accounts": [
+      { "id": "a1", "label": "account-a", "plan": "max",
+        "state": "ok",                    // "ok" | "auth_expired" | "error"
+        "error": null, "fetchedAt": "2026-08-12T15:03:58.000Z",
+        "fiveHour":       { "utilization": 42, "resetsAt": "2026-08-12T19:00:00.000Z" },
+        "sevenDay":       { "utilization": 18, "resetsAt": "2026-08-19T00:00:00.000Z" },
+        "sevenDayOpus":   null,           // window object or null, as reported
+        "sevenDaySonnet": null,
+        "sevenDayFable":  null }          // the Fable weekly window, from limits[]
+    ]
+  },
+
   "health": {
     "notes": 46,
     "links": 104,
@@ -260,6 +301,36 @@ archived run is reported `done` whatever its file says, because being archived i
 the stronger statement.
 
 The write contract lives in the vault at `60-Standards/run-status.md`.
+
+### Subscription usage
+
+`usage` is how much of each Claude subscription's rate limit is left, and is
+what the panel's which-account-to-use recommendation is derived from. It lives
+in the data dir rather than the vault because its sibling file,
+`usage-tokens.json`, holds OAuth tokens (mode 0600), and neither file may be
+committed to this public repo nor served to the phone page.
+
+Two modules, with separate trust levels:
+
+- **`usage-poller.js`** is the only writer. Started once by `server.js` after
+  the port is held — for the same reason publishing is: a duplicate daemon that
+  loses the port race must exit before it spawns work. Every 300s it queries
+  the undocumented OAuth usage endpoint once per account, sequentially about 2s
+  apart, honoring `Retry-After` on a 429. It refreshes expired access tokens
+  and persists the rotated refresh token bundle (refresh tokens rotate on every
+  use), then rewrites `usage.json` ATOMICALLY, tmp file plus rename, so a parse
+  never reads a half-written file.
+- **`usage.js`** is the reader. `readUsage(dataDir)` returns
+  `{ usage, status }` with every field whitelisted and type-checked — the same
+  rule as runs.js, because a writer under time pressure feeds the whole HUD and
+  one bad field must cost its own account, never the parse. `status: "absent"`
+  is normal before enrollment and yields `usage: null` with no warning;
+  `"broken"` (present but unparseable) yields null plus a `warnings` entry,
+  because an empty usage panel with nothing saying why reads as "no
+  subscriptions enrolled", which is a false statement.
+
+There is deliberately no `fs.watch` on `usage.json`: it changes every 300s at
+most, and the 10s safety re-parse picks each write up within one interval.
 
 ### Todo
 

@@ -9,6 +9,7 @@ import { readRunsDetailed, readFinishedRunsDetailed } from './runs.js';
 import { partitionRuns, linkSessions, sessionContext } from './public/runs-view.js';
 import { readSessions } from './sessions.js';
 import { readTranscripts } from './transcripts.js';
+import { readUsage, usageDataDir } from './usage.js';
 
 // ── context-window fill ──────────────────────────────────────────────────────
 // The window every session on this machine runs against. Measured 2026-08-12:
@@ -343,6 +344,15 @@ export default async function parseVault(vaultPath) {
   // both places: phone active [], desktop active ['r-1'], forever.
   const archived = await readFinishedRunsDetailed(root).catch(() => ({ runs: [] }));
   const runsRead = partitionRuns(runsDetail.runs, archived.runs ?? []);
+  // Subscription usage is NOT vault content: it sits in the data dir because its
+  // sibling file holds OAuth tokens, and neither may be committed to this public
+  // repo. Read alongside the runs so a broken usage.json lands in `warnings`
+  // with every other parse complaint rather than the panel going quietly empty.
+  // usageDataDir() resolves the dir per call, not at module scope: env.js only
+  // runs first for the server, and the CLI plus the tests import this module
+  // without it.
+  const dataDir = usageDataDir();
+  const usageRead = await readUsage(dataDir);
   // Which sessions are actually alive, and which of them are telling nobody.
   // A run file is the only thing that ever put a session on this board, and
   // writing one is opt-in, so most sessions appeared nowhere. Observed liveness
@@ -363,6 +373,13 @@ export default async function parseVault(vaultPath) {
     warnings.push(
       `${runsDetail.skipped} run ${runsDetail.skipped === 1 ? 'file is' : 'files are'} ` +
       'unreadable or missing a runId, and cannot be shown',
+    );
+  }
+  if (usageRead.status === 'broken') {
+    // Same rule as the runs warnings above: present but unparseable must say
+    // so, or an empty usage panel reads as "no subscriptions enrolled".
+    warnings.push(
+      `cannot parse ${path.join(dataDir, 'usage.json')} — subscription usage cannot be shown`,
     );
   }
 
@@ -515,6 +532,14 @@ export default async function parseVault(vaultPath) {
     runs: linked.runs,
     // Live sessions that are publishing nothing. One line each; see sessions.js.
     sessions: sessionsOut,
+    // Claude subscription usage, normalized by usage.js. Like `runs` it carries
+    // NO clock-derived value: app.js guards renders with a JSON.stringify diff,
+    // so a "stale for Nm" field here would make every timed broadcast look
+    // changed. Staleness, the burn-rate projection and the which-account
+    // recommendation are all derived in public/usage-view.js instead. null when
+    // no usage.json exists (normal before enrollment); a broken one is null too
+    // and raised a warning above.
+    usage: usageRead.usage,
     // Carried on State so the partial refresh can feed sessionContext the same
     // finished runs a full parse would — BOTH halves, 15-Runs and the archive.
     // Carrying only the first half was the same oscillation in a smaller form:
