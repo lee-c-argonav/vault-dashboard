@@ -6,7 +6,7 @@
 // Both import it so the two surfaces cannot disagree about whether a run is
 // waiting on you. Liveness lives here, not in State: State is diffed by
 // stringify below, so a clock-derived field would look changed on every push.
-import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText, sessionActivity, mergedRank, attentionModel, attentionCaption, agentEta, contextBreakdown, clockAt, finishClock, goalEta, goalEtaText, fanoutStrip, countAsOf }
+import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText, sessionActivity, mergedRank, attentionModel, attentionCaption, agentEta, contextBreakdown, clockAt, finishClock, goalEta, goalEtaText, fanoutGantt, countAsOf }
   from './runs-view.js';
 
 const STATE_SOURCES = ['/api/state'];
@@ -709,29 +709,47 @@ function agentList(agents, capped, now) {
   }
   wrap.append(head);
 
-  // The fan-out drawn, not only counted: a time axis from dispatch to the
-  // slowest RETURNED span. Grey ticks are returns at how long each took —
-  // spread reads as clustering — and orange ticks are live agents at their
-  // elapsed so far, marching right. One clamped amber at the end is an agent
-  // past everything that returned, the same fact the PAST text states. CSS and
-  // absolute positioning only; fractions come from the shared model so the
-  // picture and the estimate cannot disagree.
-  const marks = fanoutStrip(agents, now);
-  if (marks) {
-    const bar = el('div', 'fan-strip');
-    bar.title = `Each grey tick: a returned agent at how long it took. Each orange tick: `
-      + `a live agent at its elapsed so far. Axis 0–${humanMs(marks.axis)} (the slowest return); `
-      + 'amber at the end is an agent past every return.';
-    const tick = (cls, frac) => {
-      const t = el('i', `fan-t ${cls}`);
-      // 99.6, not 100: a 1px tick placed at left:100% sits outside the track.
-      // Half a percent of nudge on an ~500px strip is under 3px.
-      t.style.left = `${Math.min(99.6, frac * 100).toFixed(2)}%`;
-      return t;
-    };
-    for (const f of marks.done) bar.append(tick('is-done', f));
-    for (const l of marks.live) bar.append(tick(l.over ? 'is-over' : 'is-live', l.frac));
-    wrap.append(bar);
+  // The fan-out drawn as it happened: one bar per sub-agent, dispatch to return
+  // on a wall clock, lane-packed by overlap so the element's height reads as
+  // peak concurrency. Waves, stalls and stragglers are visible in place; the
+  // duration-axis strip this replaced could show none of them. The model sits
+  // in the shared module beside the estimator, reading the same stamps.
+  const gantt = fanoutGantt(agents, now);
+  if (gantt) {
+    const g = el('div', 'fan-gantt');
+    // 3px per lane is the pitch .fan-b's 2px height is written against.
+    g.style.height = `${gantt.lanes.length * 3}px`;
+    g.title = 'One bar per sub-agent: dispatch to return on a wall clock. '
+      + 'Two bars share a row only if they never overlapped, so the row count is '
+      + 'the peak concurrency. Grey returned, orange still running, amber stalled '
+      + 'or blocked, bright failed.';
+    gantt.lanes.forEach((lane, li) => {
+      for (const b of lane) {
+        const t = el('i', `fan-b ${b.cls}`);
+        t.style.left = `${(b.from * 100).toFixed(2)}%`;
+        t.style.width = `${(Math.max(0, b.to - b.from) * 100).toFixed(2)}%`;
+        t.style.top = `${li * 3}px`;
+        t.title = b.fault
+          ? `${b.label} · ${b.state} · stamp in the future, clamped to now`
+          : `${b.label} · ${b.state} · ${humanMs(b.ms)}${b.live ? ' so far' : ''}`;
+        g.append(t);
+      }
+    });
+    wrap.append(g);
+    // The scale, stated: left edge is the first dispatch, right edge is now
+    // while anything is live, else the last return.
+    const scale = el('div', 'fan-scale');
+    scale.append(el('span', 'fan-scale-a', '0'));
+    scale.append(el('span', 'fan-scale-b', `+${humanMs(gantt.windowMs)}`));
+    wrap.append(scale);
+    if (gantt.hidden) {
+      // With the notes, before the right-pushed ETA — it qualifies the count,
+      // not the estimate.
+      const note = el('span', 'run-agents-note',
+        `${gantt.hidden} OLDEST DONE NOT DRAWN`);
+      const etaEl = head.querySelector('.run-agents-eta');
+      if (etaEl) head.insertBefore(note, etaEl); else head.append(note);
+    }
   }
 
   // When nothing is out, name the most recent returns instead of showing a bare

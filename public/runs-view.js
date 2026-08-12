@@ -785,8 +785,7 @@ export function etaText(e) {
 
 /**
  * Measured spans of a fan-out's returned agents, unsorted. One extractor for
- * the estimator and the strip, so the two instruments cannot disagree about
- * what counts as a sample.
+ * the estimator, so what counts as a sample is stated in one place.
  */
 const agentSpans = (list) => list
   .filter((a) => a.state === 'done' && a.started && a.movedAt)
@@ -794,37 +793,100 @@ const agentSpans = (list) => list
   .filter((ms) => Number.isFinite(ms) && ms > 0);
 
 /**
- * The fan-out as marks on a time axis, for the strip the desktop draws.
+ * The fan-out as it actually happened: one bar per sub-agent on a wall-clock
+ * axis, for the Gantt the desktop draws.
  *
- * A text range states two numbers about a distribution; the strip shows the
- * distribution. The axis runs from dispatch to the slowest span that RETURNED —
- * the same anchor agentEta's pessimistic bound uses — so the picture and the
- * estimate are one model. Each returned agent is a tick at how long it took
- * (spread reads as clustering), each live one a tick at its elapsed so far
- * (progress reads as ticks marching right). A live agent past the axis clamps
- * at the end with `over` set: the PAST state, visible before it is read.
+ * Replaced the duration-axis tick strip on 2026-08-12. The strip plotted each
+ * agent at how long it took; it could not show dispatch waves (one 63-agent
+ * "batch" measured as four waves across four hours), every agent past the axis
+ * clamped to the same pixel so two read as one, and the axis renormalized with
+ * each slower return, so no two polls were comparable. A wall clock has none of
+ * those failure modes, and it makes a stalled agent drawable — a bar frozen at
+ * its last movement — where the strip had to leave stalled agents out entirely.
  *
- * Null below MIN_SAMPLES, exactly when agentEta refuses too: with nothing
- * returned the axis would be invented. Stalled agents appear nowhere — plotting
- * one as live claims motion, as returned claims a measurement, and it is
- * neither.
+ * The axis runs first dispatch to now while anything is live, else to the last
+ * movement, and it is measured before any bar drops, so a drawn bar never moves
+ * once placed. Bars pack into lanes by overlap — two share a lane only when one
+ * ended before the other began — so the element's height IS the peak
+ * concurrency. Beyond MAX_LANES the oldest done bars drop first, because
+ * history compresses better than live work; a live, stalled or failed bar is
+ * never dropped, and the head names the count dropped.
  *
  * Fractions, not pixels: the renderer owns its width. Desktop only by design —
- * per-agent spans are precisely what toPublicBoard strips, and per-tick
- * positions are continuous clock values the digest could never hold still.
+ * per-agent spans are precisely what toPublicBoard strips. Null only when no
+ * agent carries a dispatch stamp: a wall-clock axis needs no samples to be
+ * honest, so a single agent draws where the strip's invented axis refused.
  */
-export function fanoutStrip(agents, now) {
-  const list = agents ?? [];
-  const spans = agentSpans(list);
-  if (spans.length < MIN_SAMPLES) return null;
-  const axis = Math.max(...spans);
-  const live = list.filter((a) => a.state === 'running' || a.state === 'open')
-    .map((a) => {
-      const t = Date.parse(a.started);
-      const ms = Number.isFinite(t) ? Math.max(0, now - t) : 0;
-      return { frac: Math.min(1, ms / axis), over: ms > axis };
+export function fanoutGantt(agents, now = Date.now()) {
+  const MAX_LANES = 14;
+  const bars = [];
+  for (const a of agents ?? []) {
+    let s = Date.parse(a.started);
+    if (!Number.isFinite(s)) continue;
+    const live = a.state === 'running' || a.state === 'open';
+    // A stamp in the FUTURE is a writer bug, the same one the duration cells
+    // name as a fault. Unchecked, one corrupt bar extends the axis past now
+    // and compresses every good bar beside it. Clamp the stamp to now and
+    // carry `fault` so the title says what happened rather than printing an
+    // invented duration. An end before its start is a zero-width bar at its
+    // start — already the honest render, no flag.
+    let e = live ? now : Date.parse(a.movedAt);
+    if (!Number.isFinite(e)) e = s;
+    const fault = s > now || e > now;
+    if (s > now) s = now;
+    if (e > now) e = now;
+    if (e < s) e = s;
+    const cls = live ? 'is-live'
+      : a.state === 'stalled' || a.state === 'blocked' ? 'is-stalled'
+      : a.state === 'failed' ? 'is-failed' : 'is-done';
+    bars.push({
+      s, e, live, cls, fault,
+      droppable: a.state === 'done',
+      label: a.label || a.agentType || a.id,
+      state: a.state,
     });
-  return { axis, done: spans.map((ms) => ms / axis), live };
+  }
+  if (!bars.length) return null;
+
+  // The window is measured on the full set, before the cap drops anything:
+  // dropping the earliest bar must not move the axis under the ones that stay.
+  const t0 = Math.min(...bars.map((b) => b.s));
+  const t1 = Math.max(...bars.map((b) => b.e));
+  const span = Math.max(1, t1 - t0);
+  const liveAny = bars.some((b) => b.live);
+
+  const pack = (list) => {
+    const lanes = [];
+    for (const b of [...list].sort((x, y) => x.s - y.s)) {
+      const lane = lanes.find((L) => L[L.length - 1].e <= b.s);
+      if (lane) lane.push(b); else lanes.push([b]);
+    }
+    return lanes;
+  };
+  let hidden = 0;
+  let lanes = pack(bars);
+  while (lanes.length > MAX_LANES) {
+    let oldest = -1;
+    for (let i = 0; i < bars.length; i++) {
+      if (bars[i].droppable && (oldest < 0 || bars[i].e < bars[oldest].e)) oldest = i;
+    }
+    if (oldest < 0) break;
+    bars.splice(oldest, 1);
+    hidden++;
+    lanes = pack(bars);
+  }
+
+  return {
+    windowMs: t1 - t0,
+    live: liveAny,
+    hidden,
+    lanes: lanes.map((L) => L.map((b) => ({
+      from: (b.s - t0) / span,
+      to: Math.max((b.e - t0) / span, (b.s - t0) / span),
+      cls: b.cls, label: b.label, state: b.state, ms: b.e - b.s, live: b.live,
+      fault: b.fault,
+    }))),
+  };
 }
 
 /**

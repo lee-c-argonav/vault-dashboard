@@ -13,7 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  clockAt, finishClock, goalEta, goalEtaText, fanoutStrip, sessionActivity,
+  clockAt, finishClock, goalEta, goalEtaText, fanoutGantt, sessionActivity,
   askOf, rowSignature, agentEta,
 } from '../public/runs-view.js';
 
@@ -144,55 +144,127 @@ test('a goal with nothing left, or no units at all, claims nothing', () => {
   assert.equal(goalEta(run(), NOW), null);
 });
 
-// ── the fan-out strip: progress and spread as marks on one axis ──────────────
+// ── the fan-out Gantt: the batch as it actually happened ─────────────────────
 
-test('a fan-out of one draws no strip — the axis would be invented', () => {
-  assert.equal(fanoutStrip([agent('a', 'running', 5)], NOW), null);
-  assert.equal(fanoutStrip([], NOW), null);
-  assert.equal(fanoutStrip(null, NOW), null);
+test('a fan-out with no dispatch stamps draws no Gantt', () => {
+  assert.equal(fanoutGantt([], NOW), null);
+  assert.equal(fanoutGantt(null, NOW), null);
+  assert.equal(fanoutGantt([{ state: 'todo' }], NOW), null);
 });
 
-test('the axis is the slowest returned span and every tick sits inside it', () => {
-  const s = fanoutStrip([
-    agent('a', 'done', 60, 50), agent('b', 'done', 60, 35), agent('c', 'done', 60, 20),
-    agent('d', 'running', 12),
+test('one agent draws — a wall-clock axis is never invented', () => {
+  const g = fanoutGantt([agent('a', 'running', 5)], NOW);
+  assert.equal(g.lanes.length, 1);
+  assert.equal(g.live, true);
+  assert.equal(g.windowMs, min(5));
+  const b = g.lanes[0][0];
+  assert.equal(b.from, 0);
+  assert.equal(b.to, 1);
+  assert.equal(b.cls, 'is-live');
+});
+
+test('overlapping agents take separate lanes, disjoint agents share one', () => {
+  const g = fanoutGantt([
+    agent('a', 'done', 60, 40), agent('b', 'done', 55, 35), agent('c', 'done', 30, 10),
   ], NOW);
-  assert.equal(s.axis, min(40), 'agent b took 25m, c took 40m — the axis is 40m');
-  for (const f of s.done) assert.ok(f > 0 && f <= 1);
-  assert.equal(s.live.length, 1);
-  assert.ok(Math.abs(s.live[0].frac - 12 / 40) < 1e-9);
-  assert.equal(s.live[0].over, false);
+  assert.equal(g.lanes.length, 2);
+  assert.equal(g.live, false);
+  // First dispatch to last return, not to now: the batch is history.
+  assert.equal(g.windowMs, min(50));
 });
 
-test('a 200-agent fan-out stays bounded', () => {
+test('touching intervals share a lane', () => {
+  const g = fanoutGantt([agent('a', 'done', 60, 40), agent('b', 'done', 40, 20)], NOW);
+  assert.equal(g.lanes.length, 1);
+});
+
+test('stalled and failed agents are bars, frozen at their last movement', () => {
+  // The strip this replaced omitted stalled agents entirely, because a duration
+  // axis has no honest place for one. A wall clock does.
+  const g = fanoutGantt([
+    agent('a', 'done', 60, 50),
+    { ...agent('z', 'stalled', 55), movedAt: iso(NOW - min(45)) },
+    agent('f', 'failed', 30, 25),
+  ], NOW);
+  const flat = g.lanes.flat();
+  assert.equal(flat.length, 3);
+  assert.equal(g.live, false);
+  assert.equal(flat.find((b) => b.label === 'z').cls, 'is-stalled');
+  assert.equal(flat.find((b) => b.label === 'f').cls, 'is-failed');
+  assert.equal(g.windowMs, min(35));
+});
+
+test('past the lane cap the oldest done bars drop, live bars never do', () => {
   const list = [
-    ...Array.from({ length: 150 }, (_, i) => agent(`d${i}`, 'done', 120, 120 - (5 + (i % 30)))),
-    ...Array.from({ length: 50 }, (_, i) => agent(`r${i}`, 'running', 1 + (i % 20))),
+    ...Array.from({ length: 195 }, (_, i) => agent(`d${i}`, 'done', 300, 120 + (i % 30))),
+    ...Array.from({ length: 5 }, (_, i) => agent(`r${i}`, 'running', 1 + i)),
   ];
-  const s = fanoutStrip(list, NOW);
-  assert.equal(s.done.length, 150);
-  assert.equal(s.live.length, 50);
-  for (const f of s.done) assert.ok(f >= 0 && f <= 1);
-  for (const l of s.live) assert.ok(l.frac >= 0 && l.frac <= 1);
+  const g = fanoutGantt(list, NOW);
+  assert.equal(g.lanes.length, 14);
+  // 195 done bars, all concurrent, pack 195 lanes; the 5 live bars then ride
+  // the first five of those lanes, since every done bar ended long before they
+  // began. 195 − 181 = 14 lanes: the live five share with surviving done bars.
+  assert.equal(g.hidden, 181);
+  assert.equal(g.lanes.flat().filter((b) => b.live).length, 5);
+  // The window was measured before anything dropped: 300m, not the surviving span.
+  assert.equal(g.windowMs, min(300));
+  for (const b of g.lanes.flat()) {
+    assert.ok(b.from >= 0 && b.from <= 1);
+    assert.ok(b.to >= b.from && b.to <= 1.0001);
+  }
 });
 
-test('an agent past every sample clamps at the end and says so', () => {
-  const s = fanoutStrip([
-    agent('a', 'done', 60, 50), agent('b', 'done', 60, 49), agent('c', 'done', 60, 48),
-    agent('d', 'running', 55),
+test('a stamp in the future is clamped and named, never warping the axis', () => {
+  const g = fanoutGantt([
+    agent('a', 'done', 60, 40),
+    agent('b', 'done', 55, 35),
+    // Started 10m from now: corrupt. Unclamped it would extend the axis an
+    // hour past now and compress both good bars into the left half.
+    { ...agent('x', 'done', -10), movedAt: iso(NOW - min(30)) },
   ], NOW);
-  assert.equal(s.live[0].frac, 1);
-  assert.equal(s.live[0].over, true);
+  const x = g.lanes.flat().find((b) => b.label === 'x');
+  assert.equal(x.fault, true);
+  assert.equal(x.to, 1);
+  assert.equal(g.windowMs, min(60));
 });
 
-test('stalled agents appear nowhere on the strip', () => {
-  // Plotting one as live claims motion, as returned claims a measurement.
-  const s = fanoutStrip([
-    agent('a', 'done', 60, 50), agent('b', 'done', 60, 45), agent('c', 'done', 60, 40),
-    { ...agent('z', 'stalled', 90), movedAt: iso(NOW - min(80)) },
+test('a live agent stamped in the future draws as a right-edge dot, flagged', () => {
+  const g = fanoutGantt([
+    agent('a', 'done', 60, 30),
+    { ...agent('y', 'running', -5), movedAt: iso(NOW) },
   ], NOW);
-  assert.equal(s.done.length, 3);
-  assert.equal(s.live.length, 0);
+  const y = g.lanes.flat().find((b) => b.label === 'y');
+  assert.equal(y.fault, true);
+  assert.equal(y.cls, 'is-live');
+  assert.equal(y.from, 1);
+  assert.equal(y.to, 1);
+});
+
+test('an end before its start is a zero-width bar at its start, unflagged', () => {
+  const g = fanoutGantt([
+    agent('a', 'done', 60, 30),
+    agent('z', 'done', 45, 50),
+  ], NOW);
+  const z = g.lanes.flat().find((b) => b.label === 'z');
+  assert.equal(z.fault, false);
+  assert.equal(z.ms, 0);
+  assert.equal(z.from, z.to);
+});
+
+test('a blocked sub-agent takes the stalled bar', () => {
+  const g = fanoutGantt([agent('a', 'done', 60, 30), agent('b', 'blocked', 20, 10)], NOW);
+  assert.equal(g.lanes.flat().find((x) => x.label === 'b').cls, 'is-stalled');
+});
+
+test('a whole batch at one instant draws without inventing a window', () => {
+  const g = fanoutGantt([
+    agent('a', 'done', 10, 10), agent('b', 'done', 10, 10),
+  ], NOW);
+  assert.equal(g.windowMs, 0);
+  for (const b of g.lanes.flat()) {
+    assert.equal(b.from, 0);
+    assert.equal(b.to, 0);
+  }
 });
 
 // ── SINCE carries a figure, and SO FAR carries its tense ─────────────────────
