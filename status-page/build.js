@@ -887,6 +887,13 @@ function ranFor(r) {
  * every stamp to five minutes, so no clock printed here can claim a precision
  * the deploy cadence cannot keep.
  */
+/** A weekly reset reads as a date, a fixed fact on the same footing as clockAt. */
+const dayMon = (iso) => {
+  const t = Date.parse(iso ?? '');
+  return Number.isFinite(t)
+    ? new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+};
+
 function usageSection(usage, now) {
   const view = usageView(usage, now);
   if (!view || !view.accounts.length) return '';
@@ -938,8 +945,8 @@ function usageSection(usage, now) {
     return `<div class="qrow">` +
       `<span class="qlab">${esc(a.id)}</span>${chip}${current}` +
       `<span class="qnum">5h ${pct(a.fiveHourPct)}${reset ? ` ↻ ${esc(reset)}` : ''}</span>` +
-      `<span class="qnum">7d ${pct(a.sevenDayPct)}</span>` +
-      (a.fablePct != null ? `<span class="qnum">fab ${pct(a.fablePct)}</span>` : '') +
+      `<span class="qnum">7d ${pct(a.sevenDayPct)}${a.sevenDayResetsAt ? ` ↻ ${esc(dayMon(a.sevenDayResetsAt))}` : ''}</span>` +
+      (a.fablePct != null ? `<span class="qnum">fab ${pct(a.fablePct)}${a.fableResetsAt ? ` ↻ ${esc(dayMon(a.fableResetsAt))}` : ''}</span>` : '') +
       `</div>`;
   }).join('');
   return `<section class="quota" aria-label="Claude subscription usage">` +

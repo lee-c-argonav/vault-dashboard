@@ -201,8 +201,8 @@ test('the rendered section leads with the verdict, then one row per account', as
       );
       // Rounded by the projection before the view ever saw it.
       assert.ok(html.includes('5h 42%'), 'the 5h quota did not render rounded');
-      assert.ok(html.includes('7d 19%'), 'the 7d quota did not render rounded');
-      assert.ok(html.includes('fab 4%'), 'the Fable window did not render');
+      assert.ok(html.includes('7d 19% ↻ Aug 19'), 'the 7d quota lost its reset date');
+      assert.ok(/fab 4% ↻ Aug 1[34]/.test(html), 'the Fable window lost its reset date');
       assert.ok(html.includes('↻'), 'no reset time rendered');
       assert.ok(html.includes('AUTH EXPIRED'), 'a non-ok account carried no state chip');
       assert.ok(!html.includes('17:58:2'), 'a per-account poll stamp reached the page');

@@ -155,11 +155,11 @@ function usageRow(key, valuePct, barCls, hot, rightText, rightTitle, rightCls) {
   return row;
 }
 
-/** A weekly reset reads as a weekday; a five-day countdown helps nobody. */
+/** A weekly reset reads as a date: a weekday made the operator ask which week. */
 function usageDayAt(iso) {
   const d = new Date(iso);
   return Number.isFinite(d.getTime())
-    ? d.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase() : '';
+    ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase() : '';
 }
 
 /**
@@ -193,17 +193,21 @@ function usageCell(a, view, now) {
   }
 
   const rows = el('div', 'urows');
-  // 5H, the session row: a thick bar, the percentage, and the reset as a
-  // countdown. A pace warning that the window caps early outranks the
-  // countdown and takes its slot.
+  // 5H, the session row: the reset is ALWAYS shown — a countdown when the
+  // window is live, "not running" when nothing has started one. The pace
+  // estimate rides beside it, never in its place, and only when the current
+  // burn rate runs the window out early. It is an estimate and moves as the
+  // rate changes, so it reads "out ~", not a bare clock time. (Operator
+  // report 2026-08-12: "caps 16:20" replaced the reset, and the moving time
+  // read as a bug rather than a projection.)
   let fiveRight = 'reset --';
-  let fiveTitle = '';
   const left = a.fiveHourResetsAt != null ? Date.parse(a.fiveHourResetsAt) - now : null;
   if (left != null && left > 0) fiveRight = `reset ${humanMs(left)}`;
-  if (a.capAt) {
-    fiveRight = `caps ${clockAt(a.capAt, now)}`;
-    fiveTitle = 'At the current burn rate the five-hour window reaches 100% at this time.';
-  }
+  else if (a.fiveHourPct == null || a.fiveHourPct === 0) fiveRight = 'not running';
+  if (a.capAt) fiveRight += ` · out ~${clockAt(a.capAt, now)}`;
+  const fiveTitle = a.capAt
+    ? 'Estimated run-out at the current burn rate; it moves as the rate changes.'
+    : '';
   rows.append(usageRow('5H', a.fiveHourPct, 'ubar5',
     a.fiveHourPct != null && a.fiveHourPct >= SWITCH_SESSION_PCT, fiveRight, fiveTitle,
     a.capAt ? 'is-cap' : ''));
