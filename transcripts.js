@@ -626,7 +626,7 @@ async function readOne(session, now, touched) {
     return {
       status: pid.busy ? 'running' : 'idle',
       title: '', lastTool: '', movedAt: null, branch: '', name: pid.name,
-      agents: [], agentsCapped: 0,
+      agents: [], agentsCapped: 0, ctxUsed: null,
     };
   }
 
@@ -661,6 +661,21 @@ async function readOne(session, now, touched) {
   const sessionDir = join(dir, pid.sessionId);
   const { agents, capped } = await readAgents(join(sessionDir, 'subagents'), now, touched, sessionDir);
 
+  // The context window's current fill. The last entry carrying usage is the
+  // size of the prompt the next turn starts from: input plus both cache
+  // classes. Sidechains excluded — a sub-agent's context is its own file and
+  // its own row. Null when no entry in the tail window carries usage; the row
+  // simply has no meter, the same doctrine as every vital.
+  let ctxUsed = null;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const u = entries[i]?.message?.usage;
+    if (u && !entries[i]?.isSidechain) {
+      ctxUsed = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0)
+        + (u.cache_creation_input_tokens ?? 0);
+      break;
+    }
+  }
+
   return {
     status,
     // A tool NAME, never a tool argument and never prompt text. Desktop only;
@@ -672,6 +687,7 @@ async function readOne(session, now, touched) {
     name: pid.name,
     agents,
     agentsCapped: capped,
+    ctxUsed,
   };
 }
 

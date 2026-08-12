@@ -10,6 +10,56 @@ import { partitionRuns, linkSessions, sessionContext } from './public/runs-view.
 import { readSessions } from './sessions.js';
 import { readTranscripts } from './transcripts.js';
 
+// ── context-window fill ──────────────────────────────────────────────────────
+// The window every session on this machine runs against. Measured 2026-08-12:
+// ten of ten live Claude sessions read 295k-977k tokens, which a 200k window
+// cannot hold — the 1M tier is the de-facto window here. Override with
+// VAULT_HUD_CONTEXT_WINDOW if the plan changes; a reading past the window is
+// not hidden — the derivation reports a percentage over 100, which flags the
+// assumption rather than the session.
+const CONTEXT_WINDOW = Number(process.env.VAULT_HUD_CONTEXT_WINDOW) || 1_000_000;
+const CTX_STEP_MS = 30_000;
+const CTX_MAX_POINTS = 240;   // two hours at the 30s floor
+// `pid:since` → [{t, v}]. This daemon's lifetime only: a restart loses the
+// history, and the meter honestly starts over. In-memory by the same rule the
+// server never writes — nothing here persists anywhere.
+const ctxHistory = new Map();
+
+/**
+ * Attach `ctx` — current fill, the believed window, and the fill's history —
+ * to every session object that reported a usage reading. The current slot is
+ * refreshed within the 30s floor so a compaction's cliff lands promptly
+ * instead of up to half a minute late. Eviction keys on board MEMBERSHIP, not
+ * on a fresh reading: a transcript unparseable for one pass must not throw
+ * away two hours of history for a session that is still on the board.
+ * Exported for the tests; the production caller is observeSessions.
+ */
+export function attachContext(items, now) {
+  const seen = new Set();
+  for (const s of items) {
+    if (!s || s.pid == null) continue;
+    const key = `${s.pid}:${s.since ?? ''}`;
+    seen.add(key);
+    if (!Number.isFinite(s.ctxUsed)) continue;
+    let h = ctxHistory.get(key);
+    if (!h) ctxHistory.set(key, (h = []));
+    if (h.length && now - h[h.length - 1].t < CTX_STEP_MS) {
+      h[h.length - 1].v = s.ctxUsed;
+    } else {
+      h.push({ t: now, v: s.ctxUsed });
+      if (h.length > CTX_MAX_POINTS) h.splice(0, h.length - CTX_MAX_POINTS);
+    }
+    s.ctx = { used: s.ctxUsed, max: CONTEXT_WINDOW, series: h };
+    delete s.ctxUsed;
+  }
+  for (const k of [...ctxHistory.keys()]) if (!seen.has(k)) ctxHistory.delete(k);
+}
+
+/** Test hook: forget the sample history. Production never calls this. */
+export function resetContextHistory() {
+  ctxHistory.clear();
+}
+
 /**
  * Which sessions are alive, what each is doing, and which run belongs to which.
  *
@@ -47,6 +97,10 @@ export async function observeSessions(activeRuns, finishedRuns, nowMs) {
   const runs = linked.runs.map((r) => (r.session
     ? { ...r, session: { ...r.session, ...(observed.get(r.session.pid) ?? {}) } }
     : r));
+  attachContext(
+    sessions.concat(runs.map((r) => r.session).filter(Boolean)),
+    nowMs,
+  );
   return { runs, sessions };
 }
 

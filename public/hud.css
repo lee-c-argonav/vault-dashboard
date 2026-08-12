@@ -862,6 +862,42 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* The context-window meter: recent fill as 3px bars on an 11px track, the
+   current figure, and a warning mark past 80%. Bars are fractions of the
+   window itself — the top of the track is the ceiling — so the shape reads
+   absolutely and a flat top at 90% means what it says. The track's hairline
+   sits ON the row's text baseline: the first cut centered the element against
+   the line and it read as floating, unaligned with anything. The figure is
+   --bone, the headline tone, because it is the one number that decides how
+   much session is left; grey at --text-3 made it the quietest thing on a row
+   it outranks. Amber past 80%, the same thing the board spends amber on
+   everywhere. Desktop only: the phone projection is an allowlist and `ctx` is
+   not on it — and a value ticking every half minute would defeat its
+   publish-on-change digest. */
+.ctxm { display: inline-flex; align-items: baseline; gap: 7px; }
+.ctxm-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 11px;
+  border-bottom: 1px solid var(--rule-hot);
+}
+.ctxm-b { width: 3px; background: var(--dim); }
+/* A hole in the sample record: the bar is absent and the hairline runs on. */
+.ctxm-g { width: 3px; }
+.ctxm-pct {
+  font: 11px/1 var(--mono);
+  letter-spacing: .06em;
+  color: var(--bone);
+  font-variant-numeric: tabular-nums;
+}
+.ctxm-warn { color: var(--amber); font-size: 10px; line-height: 1; }
+.ctxm.is-hot .ctxm-b { background: var(--amber); }
+.ctxm.is-hot .ctxm-pct { color: var(--amber); }
+/* In the run foot the ETA keeps the right edge and the meter joins it there:
+   the auto margin moves onto the ETA, so the left statement never moves. */
+.run-foot .run-eta { margin-left: auto; }
+
 .run.is-done .run-goal { color: var(--dim); }
 
 /* Collapsed: one line for a run beyond the handful worth expanding. Everything

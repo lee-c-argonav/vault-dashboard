@@ -6,7 +6,7 @@
 // Both import it so the two surfaces cannot disagree about whether a run is
 // waiting on you. Liveness lives here, not in State: State is diffed by
 // stringify below, so a clock-derived field would look changed on every push.
-import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText, sessionActivity, mergedRank, attentionModel, attentionCaption, agentEta, contextBreakdown, clockAt, finishClock, goalEta, goalEtaText, fanoutGantt, countAsOf }
+import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText, sessionActivity, mergedRank, attentionModel, attentionCaption, agentEta, contextBreakdown, clockAt, finishClock, goalEta, goalEtaText, fanoutGantt, contextOf, countAsOf }
   from './runs-view.js';
 
 const STATE_SOURCES = ['/api/state'];
@@ -424,6 +424,37 @@ function unitList(units, now) {
   return wrap;
 }
 
+/**
+ * The context-window meter: recent fill as bars, the current percentage, and
+ * a warning mark once it crosses 80%. One element for both row kinds — a run
+ * row gets its linked session's meter, a standalone session row its own.
+ * Bars are fractions of the window itself, so the shape reads absolutely and
+ * the top of the track is the ceiling. Null when nothing was read.
+ */
+function ctxMeter(ctx) {
+  const c = contextOf(ctx);
+  if (!c) return null;
+  const m = el('span', `ctxm${c.hot ? ' is-hot' : ''}`);
+  const bars = el('span', 'ctxm-bars');
+  for (const p of c.points) {
+    // A hole in the sample record gets an empty slot, not a bar: the break
+    // is part of what happened.
+    if (p.gap) bars.append(el('i', 'ctxm-g'));
+    const b = el('i', 'ctxm-b');
+    // 9% of the 11px track is 1px: a near-empty window is still a visible tick.
+    b.style.height = `${Math.max(9, p.f * 100).toFixed(1)}%`;
+    bars.append(b);
+  }
+  m.append(bars);
+  m.append(el('span', 'ctxm-pct', `${c.pct}%`));
+  if (c.hot) m.append(el('span', 'ctxm-warn', '▲'));
+  const tok = (v) => (v >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : `${Math.round(v / 1e3)}k`);
+  m.title = `Context ${c.pct}% full — ${tok(c.used)} of ${tok(c.max)} tokens. `
+    + 'Bars are the fill over recent time; the top of the track is the window.'
+    + (c.hot ? ' Past 80%: compaction is close.' : '');
+  return m;
+}
+
 function runRow(r, now, expanded = true) {
   const st = runState(r);
   const nostamp = quietMs(r, now) === null;
@@ -533,7 +564,7 @@ function runRow(r, now, expanded = true) {
   // questions and each sits with its subject.
   const g = goalEta(r, now);
   const fin = g?.kind === 'estimate' ? finishClock(g, now) : '';
-  const slot = el('span', null, goalEtaText(g) + (fin ? ` · ${fin}` : ''));
+  const slot = el('span', 'run-eta', goalEtaText(g) + (fin ? ` · ${fin}` : ''));
   if (g?.kind === 'estimate') {
     slot.title = `Estimated from ${g.measured} timed units — mean unit time × what remains, `
       + 'widened by the measured spread. The clock is the projected finish.';
@@ -544,6 +575,9 @@ function runRow(r, now, expanded = true) {
     slot.title = 'A forecast needs 3 independently timed units; this run does not have them yet.';
   }
   foot.append(slot);
+  // The linked session's context fill, at the foot's right end.
+  const cm = ctxMeter(r.session?.ctx);
+  if (cm) foot.append(cm);
   row.append(foot);
   return row;
 }
@@ -609,6 +643,10 @@ function sessionRow(s, now) {
   // a session that could not be joined at all — a Kimi session, or one whose
   // files are unreadable — rather than being the default for everything.
   head.append(el('span', 'sess-tag', (s.status || (s.context ? 'idle' : 'no status')).toUpperCase()));
+  // The context meter, right end of the head: the one number that decides how
+  // much session is left.
+  const cm = ctxMeter(s.ctx);
+  if (cm) head.append(cm);
   row.append(head);
   if (meta) {
     const where = el('div', 'sess-where', meta);
@@ -879,6 +917,10 @@ function renderRuns(runs, sessions = []) {
       // and then never changes again.
       (s.agents ?? []).map((a) => `${a.id}${a.state}${a.label ?? ''}${a.started ?? ''}`).join(','),
       s.movedAt ? Math.floor(Date.parse(s.movedAt) / 30_000) : '',
+      // The context meter's figure. The percentage is its own bucket: it moves
+      // when a point of fill moves — once a minute on a busy session, the same
+      // cadence class as the quiet counter — and never faster.
+      contextOf(s.ctx)?.pct ?? '',
     ].join('\x01')),
   ].join('\n');
   if (sig !== runsSig) {

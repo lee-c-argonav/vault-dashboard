@@ -890,6 +890,57 @@ export function fanoutGantt(agents, now = Date.now()) {
 }
 
 /**
+ * A session's context-window fill, for the meter the desktop draws per row.
+ *
+ * `used` is the size of the prompt the next turn starts from — input plus both
+ * cache classes of the last usage-carrying transcript entry — and `max` is the
+ * window the daemon believes in (see parse.js for the measurement behind the
+ * default). Bar heights are fractions OF THE WINDOW, not of the peak observed:
+ * the track's top edge is the ceiling, so a flat-topped curve at 90% says what
+ * it means and growth reads absolutely. The percentage is reported raw — over
+ * 100 means the window assumption is wrong, which is a fact worth surfacing
+ * rather than clamping.
+ *
+ * Null when the session reported nothing readable (a Kimi session, a missing
+ * transcript): the row simply has no meter, the same doctrine as every vital.
+ * Desktop only: the phone's projection is an allowlist this field is not on,
+ * and a value ticking every half minute would defeat its publish-on-change
+ * digest.
+ */
+export function contextOf(ctx) {
+  if (!ctx || !Number.isFinite(ctx.used) || !Number.isFinite(ctx.max) || ctx.max <= 0) return null;
+  const pct = Math.round((100 * ctx.used) / ctx.max);
+  const pts = [];
+  for (const p of (Array.isArray(ctx.series) ? ctx.series : [])) {
+    if (!Number.isFinite(p?.v)) continue;
+    pts.push({
+      f: Math.max(0, Math.min(1, p.v / ctx.max)),
+      t: Number.isFinite(p?.t) ? p.t : null,
+    });
+  }
+  // The meter draws at most 36 bars, evenly spaced across whatever history
+  // exists, with the latest point always drawn — it is the current fill. A
+  // hole in the sampling (a closed lid, a stalled parse) becomes an empty
+  // slot rather than reading as a seamless climb: the break is the truth of
+  // the record, and it rolls forward when the downsampling drops the exact
+  // point the hole opened at.
+  const MAX_BARS = 36;
+  const GAP_MS = 90_000;   // 3x the daemon's 30s sampling floor
+  const step = Math.max(1, Math.ceil(pts.length / MAX_BARS));
+  const points = [];
+  let gapPending = false;
+  for (let i = 0; i < pts.length; i++) {
+    if (i > 0 && pts[i].t != null && pts[i - 1].t != null
+        && pts[i].t - pts[i - 1].t > GAP_MS) gapPending = true;
+    if (i % step === 0 || i === pts.length - 1) {
+      points.push({ f: pts[i].f, gap: gapPending && points.length > 0 });
+      gapPending = false;
+    }
+  }
+  return { used: ctx.used, max: ctx.max, pct, hot: pct >= 80, points };
+}
+
+/**
  * Time left on a fan-out, from the sub-agents that have already returned.
  *
  * Reuses `eta` rather than reimplementing it: an agent is a unit as far as the
@@ -1019,6 +1070,10 @@ export function rowSignature(run, now) {
     // NO UPDATE. Left out of the signature, a run whose session exits keeps
     // claiming the session is alive until something else changes.
     runState(run), stateText(run, now, run.session), run.session?.pid ?? '',
+    // The context meter's percentage: without it a filling window never
+    // repaints the row. The figure itself is the bucket, so the row rebuilds
+    // when a point of fill moves and never faster.
+    contextOf(run.session?.ctx)?.pct ?? '',
     run.units.map((u) => u.state).join(''),
     run.needsInput[0]?.question ?? '', run.blockers[0]?.what ?? '',
     JSON.stringify(eta(run.units)),
