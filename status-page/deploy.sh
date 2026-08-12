@@ -82,6 +82,17 @@ done
 # build and the upload: the pre-push gate reads the git tree, and this page is
 # never committed, so nothing had ever looked at the bytes actually served.
 #
+# The session NAME is exempt too, as of 2026-08-11, because the operator asked
+# for it and it is therefore deliberately published content — the same category
+# as a run goal, not an accident. It is exempted per ELEMENT, so the gate still
+# reads everything else on the row: a path, a branch or a tool name appearing
+# beside the name would still block the publish.
+#
+# This is the narrowest change that unblocks it. The alternative — dropping the
+# two name patterns in .confidential-patterns — would blind the scan everywhere,
+# and a session name contains those words incidentally rather than being what the
+# patterns are for. Reverse by deleting the class="sl" line below.
+#
 # RUN-AUTHORED TEXT IS EXEMPT by the 2026-08-11 decision — the goal, the note,
 # unit labels, the ask and the run's project are deliberately published, and the
 # operator writes them. Those regions are stripped before the scan, so what is
@@ -105,6 +116,7 @@ if [ -f "$patterns" ]; then
     -e 's#<span class="uid">[^<]*</span>##g' \
     -e 's#<div class="sctx">[^<]*</div>##g' \
     -e 's#<span class="hg">[^<]*</span>##g' \
+    -e 's#<span class="sl">[^<]*</span>##g' \
     "$HERE/public/index.html")
   bad=0
   while IFS= read -r pat; do
