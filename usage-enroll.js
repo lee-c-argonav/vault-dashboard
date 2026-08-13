@@ -25,7 +25,7 @@ import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { usageDataDir } from './usage.js';
-import { readTokenStore, refreshAccount, writeTokenStore } from './usage-poller.js';
+import { readTokenStore, refreshAccount, updateTokenStore } from './usage-poller.js';
 
 const execFileP = promisify(execFile);
 
@@ -40,15 +40,20 @@ class UsageError extends Error {}
 /* ── where the credential comes from ────────────────────────────────────── */
 
 /**
- * The Keychain service name for a CLI profile. The default ~/.claude profile
- * is plain `Claude Code-credentials`; a custom CLAUDE_CONFIG_DIR gets the
- * first 8 hex of sha256 of the EXPANDED ABSOLUTE path appended.
+ * The Keychain service names to try for a CLI profile. The default ~/.claude
+ * profile is plain `Claude Code-credentials`; a custom CLAUDE_CONFIG_DIR gets
+ * the first 8 hex of sha256 of the value THE CLI SEES appended. The installed
+ * CLI NFC-normalizes the raw env string and does no path resolution, so the
+ * raw spelling is tried first and the resolved absolute spelling second —
+ * they differ for a trailing slash, a relative path, or `..`/`.` segments,
+ * and only the raw one is guaranteed to match.
  */
-function keychainService(configDir) {
-  if (!configDir) return 'Claude Code-credentials';
-  const expanded = resolve(configDir.replace(/^~(?=$|\/)/, homedir()));
-  const suffix = createHash('sha256').update(expanded).digest('hex').slice(0, 8);
-  return `Claude Code-credentials-${suffix}`;
+function keychainServices(configDir) {
+  if (!configDir) return ['Claude Code-credentials'];
+  const hash = (s) => `Claude Code-credentials-${createHash('sha256').update(s).digest('hex').slice(0, 8)}`;
+  const raw = configDir.normalize('NFC');
+  const resolved = resolve(configDir.replace(/^~(?=$|\/)/, homedir())).normalize('NFC');
+  return [...new Set([hash(raw), hash(resolved)])];
 }
 
 /** The raw credential JSON for a profile, from the Keychain or from stdin. */
@@ -58,18 +63,25 @@ async function readCredential({ configDir, useStdin }) {
     for await (const chunk of process.stdin) chunks.push(chunk);
     return Buffer.concat(chunks).toString('utf8');
   }
-  const service = keychainService(configDir);
-  try {
-    const { stdout } = await execFileP('security', ['find-generic-password', '-s', service, '-w']);
-    return stdout.trim();
-  } catch {
-    throw new Error(
-      `no Keychain entry named "${service}".\n` +
-      (configDir
-        ? `Is that profile logged in? Create it with:\n  CLAUDE_CONFIG_DIR=${configDir} claude\nlog in inside it, then re-run with --config-dir ${configDir}.`
-        : 'Is Claude Code installed and logged in? Or paste the credential JSON with --stdin.'),
-    );
+  const services = keychainServices(configDir);
+  let lastErr = null;
+  for (const service of services) {
+    try {
+      const { stdout } = await execFileP('security', ['find-generic-password', '-s', service, '-w']);
+      return stdout.trim();
+    } catch (err) {
+      lastErr = err;
+    }
   }
+  // The failure's stderr is safe to name: a failed find carries no payload,
+  // and "User interaction is not allowed" (an SSH session) is not "missing".
+  const why = String(lastErr?.stderr || lastErr?.message || 'unknown error').trim().slice(0, 120);
+  throw new Error(
+    `no Keychain entry named "${services[0]}" (${why}).\n` +
+    (configDir
+      ? `Is that profile logged in? Create it with:\n  CLAUDE_CONFIG_DIR=${configDir} claude\nlog in inside it, then re-run with --config-dir ${configDir}.`
+      : 'Is Claude Code installed and logged in? Or paste the credential JSON with --stdin.'),
+  );
 }
 
 /**
@@ -107,13 +119,20 @@ function parseBundle(text) {
 
 async function addAccount({ id, label, plan, configDir, useStdin }) {
   const dataDir = usageDataDir();
-  let store;
+  // The id is what the phone page prints, verbatim, on an unauthenticated
+  // URL. Letters, digits and dash only: an email-shaped id would quietly
+  // defeat the label-stripping that keeps addresses off that page.
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) {
+    throw new Error('the id prints on the public phone page; use lowercase letters, digits and dashes only (e.g. acct2).');
+  }
+  let existing;
   try {
-    store = (await readTokenStore(dataDir)) ?? { schema: 1, accounts: [] };
+    existing = await readTokenStore(dataDir);
   } catch (err) {
     throw new Error(`usage-tokens.json exists but is unreadable (${err.message}). Fix or remove it by hand; it will not be overwritten.`);
   }
-  if (store.accounts.some((a) => a.id === id)) {
+  // Before the credential read and its side-effecting refresh, not after.
+  if (existing?.accounts.some((a) => a.id === id)) {
     throw new Error(`"${id}" is already enrolled — remove it first if you mean to replace it.`);
   }
   const bundle = parseBundle(await readCredential({ configDir, useStdin }));
@@ -133,8 +152,23 @@ async function addAccount({ id, label, plan, configDir, useStdin }) {
   if (!r.ok) {
     throw new Error(`the decoupling refresh failed: ${r.error}. Nothing was stored; the CLI profile is untouched.`);
   }
-  store.accounts.push(r.account);
-  await writeTokenStore(dataDir, store);
+  // The persist merges against a fresh read: the poller may have rotated
+  // another account's bundle while this enrollment was refreshing.
+  try {
+    await updateTokenStore(dataDir, (fresh) => {
+      if (fresh.accounts.some((a) => a.id === id)) {
+        throw new Error(`"${id}" is already enrolled — remove it first if you mean to replace it.`);
+      }
+      fresh.accounts.push(r.account);
+      return fresh;
+    });
+  } catch (err) {
+    if (err.message.includes('already enrolled')) throw err;
+    throw new Error(
+      `the enrollment write failed (${err.message}) AFTER the decoupling refresh succeeded. `
+      + 'Nothing was stored, but the CLI profile\'s refresh token is already rotated: '
+      + 'that profile will need one re-login, and this account needs enrolling again.');
+  }
   return r.account;
 }
 
@@ -151,12 +185,13 @@ async function listAccounts() {
 
 async function removeAccount(id) {
   const dataDir = usageDataDir();
-  const store = await readTokenStore(dataDir);
-  if (!store || !store.accounts.some((a) => a.id === id)) {
-    throw new Error(`no enrolled account with id "${id}".`);
-  }
-  store.accounts = store.accounts.filter((a) => a.id !== id);
-  await writeTokenStore(dataDir, store);
+  await updateTokenStore(dataDir, (fresh) => {
+    if (!fresh.accounts.some((a) => a.id === id)) {
+      throw new Error(`no enrolled account with id "${id}".`);
+    }
+    fresh.accounts = fresh.accounts.filter((a) => a.id !== id);
+    return fresh;
+  });
   process.stdout.write(`Removed "${id}".\n`);
 }
 
@@ -172,8 +207,15 @@ function parseArgs(argv) {
     for (let i = 0; i < rest.length; i++) {
       const a = rest[i];
       if (a === '--stdin') opts.useStdin = true;
-      else if (a === '--plan') opts.plan = rest[++i];
-      else if (a === '--config-dir') opts.configDir = rest[++i];
+      else if (a === '--plan' || a === '--config-dir') {
+        const v = rest[++i];
+        // A missing or flag-shaped value means the option was left dangling;
+        // accepting it would silently enroll the DEFAULT profile instead of
+        // the intended one, and its decoupling refresh would orphan any
+        // previously enrolled copy of that profile.
+        if (v === undefined || v.startsWith('--')) throw new UsageError();
+        if (a === '--plan') opts.plan = v; else opts.configDir = v;
+      }
       else if (a.startsWith('--')) throw new UsageError();
       else positional.push(a);
     }

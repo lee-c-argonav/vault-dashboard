@@ -146,8 +146,8 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
  * NOT published: the account label is operator free text, and the first real
  * labels were email addresses, which the publish scan caught on 2026-08-12.
  * The projection drops the label and the section renders the enrollment id.
- * What the projection otherwise cuts is movement, not identity: percentages are
- * rounded and timestamps bucketed, because the digest below keys off this
+ * What the projection otherwise cuts is movement, not identity: percentages
+ * are floored and timestamps bucketed, because the digest below keys off this
  * projection and a field that drifts by fractions of a point every poll would
  * deploy every tick without the page ever saying anything new.
  */
@@ -254,6 +254,13 @@ export function toPublicBoard(board, now) {
    * nothing else does, so carrying it would make every poll a deploy; the
    * staleness the phone needs to disclose is a property of the file, and the
    * board-level `updated` says it.
+   *
+   * Percentages are FLOORED, never rounded: the phone re-derives the verdict
+   * from these numbers, and the thresholds are integers (80/90/98). Rounding
+   * put a half-point band around every threshold where the phone and the
+   * desktop disagreed — a raw 97.9 rendered as 98 made the phone declare an
+   * account OUT while the desktop called it usable (review, 2026-08-12).
+   * Flooring agrees with the raw reader at every integer line.
    */
   const usage = (u) => {
     if (!u || typeof u !== 'object') return null;
@@ -262,7 +269,7 @@ export function toPublicBoard(board, now) {
       const t = Date.parse(iso);
       return Number.isFinite(t) ? new Date(Math.floor(t / BUCKET) * BUCKET).toISOString() : null;
     };
-    const pct = (n) => (typeof n === 'number' && Number.isFinite(n) ? Math.round(n) : null);
+    const pct = (n) => (typeof n === 'number' && Number.isFinite(n) ? Math.floor(n) : null);
     const span = (w) => (w && typeof w === 'object'
       ? { utilization: pct(w.utilization), resetsAt: bucket(w.resetsAt) }
       : null);
@@ -478,7 +485,10 @@ export function boardDigest(rawBoard, now = null) {
   // nothing anyone can read.
   const usageStale = () => {
     if (now === null || !usage?.updated) return 0;
-    return now - Date.parse(usage.updated) > USAGE_STALE_MS ? 1 : 0;
+    // `updated` is floored to its bucket, so the true stamp is up to one
+    // bucket FRESHER: claim "≥15m" only when even the freshest possible true
+    // age clears the line.
+    return now - Date.parse(usage.updated) > USAGE_STALE_MS + 5 * 60_000 ? 1 : 0;
   };
   return createHash('sha256').update(JSON.stringify({
     active: active.map((r) => [run(r), silence(r)]),
@@ -501,12 +511,20 @@ export function boardDigest(rawBoard, now = null) {
       s.name, s.since, s.status, s.silentBucket, s.agentsOut, s.agentsTotal, s.agentsCapped,
       s.etaMins, s.etaOver, s.context,
     ]),
-    // The projected usage, hashed whole: every field in it is already rounded
-    // or bucketed by the same code that publishes it, so the digest cannot
-    // churn on sub-decision movement — but it must move when a percentage, an
-    // account state or the poll stamp actually changes, or the phone would
-    // show last poll's quotas indefinitely.
-    usage: usage ? [usage, usageStale()] : null,
+    // Only what the usage section RENDERS. Hashing the whole projection meant
+    // the bucketed `updated` — which advances every 300s poll by construction —
+    // fired a deploy per poll over a byte-identical page (~288/day), and the
+    // never-rendered plan/opus/sonnet fields did the same in miniature (review,
+    // 2026-08-12). Staleness still fires, via the clock term: a dead poller
+    // freezes every field here and only usageStale moves.
+    usage: usage ? [
+      usage.currentAccountId,
+      usageStale(),
+      usage.accounts.map((a) => [a.id, a.state, a.error,
+        a.fiveHour?.utilization, a.fiveHour?.resetsAt,
+        a.sevenDay?.utilization, a.sevenDay?.resetsAt,
+        a.sevenDayFable?.utilization, a.sevenDayFable?.resetsAt]),
+    ] : null,
   })).digest('hex');
 }
 
@@ -930,7 +948,12 @@ function usageSection(usage, now) {
       over.push(`${Math.round(v.current.fiveHourPct)}% session`);
     if (v.current.sevenDayPct != null && v.current.sevenDayPct >= SWITCH_WEEK_PCT)
       over.push(`${Math.round(v.current.sevenDayPct)}% week`);
-    verdict = `Switch to <b>${esc(v.target.id)}</b> · ${esc(v.current.id)} at ${esc(over.join(' · ') || 'the line')}`;
+    // An empty `over` means the current is not over a line at all — it is not
+    // reporting (auth expired, error), and "at the line" would be a lie.
+    const why = over.length
+      ? `${esc(v.current.id)} at ${esc(over.join(' · '))}`
+      : `${esc(v.current.id)} is ${esc(v.current.state.replace('_', ' '))}`;
+    verdict = `Switch to <b>${esc(v.target.id)}</b> · ${why}`;
   } else if (v.kind === 'best') {
     verdict = `Best headroom: <b>${esc(v.target.id)}</b> · ${esc(quotas(v.target))}`;
   } else {

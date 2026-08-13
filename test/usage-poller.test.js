@@ -481,3 +481,56 @@ test('a keychain read failure leaves the current account unknown, the poll fine'
   assert.equal(usage.accounts[0].state, 'ok');
   await cleanup(dir);
 });
+
+/* ── the store write merges against a fresh read ────────────────────────── */
+
+test('a rotation persist does not clobber an account enrolled mid-poll', async () => {
+  // The review's repro: enrollment lands between the poll's store read and
+  // its rotation write. The usage fetch doubles as the "other writer".
+  const stale = account({ expiresAt: iso(T0 - 1000) }); // forces the refresh path
+  const dir = await dataDirWith(storeOf(stale));
+  const newcomer = account({ id: 'sprocket', label: 'Sprocket', accessToken: 'syn-access-9',
+    refreshToken: 'syn-refresh-9', expiresAt: iso(T0 + 2 * hour) });
+  const fetch = mockFetch({
+    [REFRESH_PLATFORM]: () => jsonResponse({
+      access_token: 'syn-access-2', refresh_token: 'syn-refresh-2', expires_in: 3600,
+    }),
+    [USAGE]: async () => {
+      const store = JSON.parse(await readFile(join(dir, 'usage-tokens.json'), 'utf8'));
+      store.accounts.push(newcomer);
+      await writeFile(join(dir, 'usage-tokens.json'), JSON.stringify(store));
+      return jsonResponse(usagePayload());
+    },
+  });
+  await pollOnce({ dataDir: dir, fetch, now, sleep: silent, log: silent, exec: noKeychain });
+  const store = JSON.parse(await readFile(join(dir, 'usage-tokens.json'), 'utf8'));
+  const ids = store.accounts.map((a) => a.id).sort();
+  assert.deepEqual(ids, ['sprocket', 'widget'], 'the mid-poll enrollment was clobbered');
+  assert.equal(store.accounts.find((a) => a.id === 'widget').refreshToken, 'syn-refresh-2',
+    'the rotation itself was not persisted');
+  await cleanup(dir);
+});
+
+test('a rotation persist yields to a bundle another writer rotated first', async () => {
+  // Same race, opposite interleaving: the on-disk bundle no longer descends
+  // from the token this poll read, so the newer lineage wins and the poll's
+  // rotated copy dies unused rather than bricking the account on a dead token.
+  const stale = account({ expiresAt: iso(T0 - 1000) });
+  const dir = await dataDirWith(storeOf(stale));
+  const fetch = mockFetch({
+    [REFRESH_PLATFORM]: () => jsonResponse({
+      access_token: 'syn-access-2', refresh_token: 'syn-refresh-2', expires_in: 3600,
+    }),
+    [USAGE]: async () => {
+      const store = JSON.parse(await readFile(join(dir, 'usage-tokens.json'), 'utf8'));
+      store.accounts[0].refreshToken = 'syn-refresh-from-another-writer';
+      await writeFile(join(dir, 'usage-tokens.json'), JSON.stringify(store));
+      return jsonResponse(usagePayload());
+    },
+  });
+  await pollOnce({ dataDir: dir, fetch, now, sleep: silent, log: silent, exec: noKeychain });
+  const store = JSON.parse(await readFile(join(dir, 'usage-tokens.json'), 'utf8'));
+  assert.equal(store.accounts[0].refreshToken, 'syn-refresh-from-another-writer',
+    'the newer lineage was overwritten by the poll\'s stale-view write');
+  await cleanup(dir);
+});

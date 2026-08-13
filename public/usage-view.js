@@ -107,13 +107,13 @@ function accountView(a, nowMs) {
  *   spent   no account has both buckets available; nextFree says when one
  *           frees.
  *
- * Available means: reporting ok, a MEASURED session under 100, and a week
- * either unread or under 100 — a null session reading is never eligible, and
- * `null < 100` passing silently is exactly the kind of accident this function
- * exists to prevent. Ranking: cool accounts (under both switch thresholds)
- * before hot ones, then the lightest session, then the lightest week (a
- * missing week loses to any measured one), then the label so both surfaces
- * name the same account.
+ * Available means: reporting ok, a MEASURED session under OUT_PCT, and a week
+ * either unread or under OUT_PCT — a null session reading is never eligible,
+ * and `null < 100` passing silently is exactly the kind of accident this
+ * function exists to prevent. Ranking: cool accounts (under both switch
+ * thresholds) before hot ones, then the lightest session, then the lightest
+ * week (a missing week loses to any measured one), then the label so both
+ * surfaces name the same account.
  */
 export const SWITCH_SESSION_PCT = 80;
 export const SWITCH_WEEK_PCT = 90;
@@ -171,15 +171,25 @@ export function usageView(usage, nowMs) {
   const updatedMs = Date.parse(typeof usage.updated === 'string' ? usage.updated : '');
   const ageMs = Number.isFinite(updatedMs) ? Math.max(0, nowMs - updatedMs) : null;
 
-  // The earliest session reset still ahead, over healthy accounts only. This is
-  // the answer to "when do I get an account back" — past resets free nothing.
+  // When the first account comes back. Per ok account the freeing time is the
+  // LATEST of the resets its out-reading binds to: a spent session frees at
+  // the session reset, a spent week frees at the weekly reset, and an account
+  // out on both is back only when the later of the two passes — the first
+  // version named the 5h reset even when the week was the binding constraint,
+  // so "frees in 2h" was false (review, 2026-08-12). An account whose binding
+  // reset is missing cannot be timed and is skipped rather than guessed at.
   let nextFree = null;
   for (const a of accounts) {
-    if (a.state !== 'ok' || a.fiveHourResetsAt == null) continue;
-    const t = Date.parse(a.fiveHourResetsAt);
-    if (t <= nowMs) continue;
-    if (!nextFree || t < Date.parse(nextFree.at)) {
-      nextFree = { id: a.id, label: a.label, at: a.fiveHourResetsAt };
+    if (a.state !== 'ok') continue;
+    const binding = [];
+    if (a.fiveHourPct != null && a.fiveHourPct >= OUT_PCT && a.fiveHourResetsAt != null)
+      binding.push(Date.parse(a.fiveHourResetsAt));
+    if (a.sevenDayPct != null && a.sevenDayPct >= OUT_PCT && a.sevenDayResetsAt != null)
+      binding.push(Date.parse(a.sevenDayResetsAt));
+    const frees = binding.length ? Math.max(...binding) : null;
+    if (frees === null || frees <= nowMs) continue;
+    if (!nextFree || frees < Date.parse(nextFree.at)) {
+      nextFree = { id: a.id, label: a.label, at: new Date(frees).toISOString() };
     }
   }
 

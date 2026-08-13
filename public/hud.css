@@ -449,8 +449,9 @@ body {
 /* The switch target is the one action the strip ever asks for: the accent. */
 .uverdict.is-switch .uverdict-line { color: var(--orange); }
 /* Over a threshold but still the best available: the advice is stay, the
-   colour says watch it. */
-.uverdict.is-hot .uverdict-line { color: var(--amber); }
+   colour says watch it. Scoped to is-stay: switch verdicts are hot by
+   construction, and an unscoped rule would outrank the accent by order. */
+.uverdict.is-stay.is-hot .uverdict-line { color: var(--amber); }
 .uverdict.is-spent .uverdict-line { color: var(--amber); text-transform: uppercase; }
 .uverdict-sub {
   margin: 6px 0 0;

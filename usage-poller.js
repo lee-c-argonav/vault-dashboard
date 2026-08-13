@@ -33,6 +33,10 @@ const execFileP = promisify(execFile);
 const TOKEN_FILE = 'usage-tokens.json';
 const USAGE_FILE = 'usage.json';
 
+// The "no accounts enrolled" line logs once per emptiness streak, not every
+// tick: the 300s cadence would otherwise turn a removal into forever-spam.
+let noAccountsLogged = false;
+
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 // Answers "which account is this token": one stable uuid per account, used to
 // name the profile the default CLI is signed into right now.
@@ -85,7 +89,9 @@ function normaliseTokenAccount(a) {
 /**
  * Read usage-tokens.json. Absent → null (never enrolled). Present but not a
  * v1 store → throw: the file holds secrets, and a reader that guessed at its
- * shape could mangle it on the next write.
+ * shape could mangle it on the next write. The parse error is sanitized: on
+ * Node 22 the V8 message echoes a ~20-char source excerpt, and this source is
+ * tokens.
  */
 export async function readTokenStore(dataDir) {
   let text;
@@ -95,7 +101,12 @@ export async function readTokenStore(dataDir) {
     if (err?.code === 'ENOENT') return null;
     throw err;
   }
-  const raw = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+  let raw;
+  try {
+    raw = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+  } catch {
+    throw new Error('usage-tokens.json is not valid JSON');
+  }
   if (!isObj(raw) || raw.schema !== 1 || !Array.isArray(raw.accounts)) {
     throw new Error('usage-tokens.json is not a v1 token store');
   }
@@ -110,6 +121,22 @@ export async function readTokenStore(dataDir) {
 export async function writeTokenStore(dataDir, store) {
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
   await writeJsonAtomic(join(dataDir, TOKEN_FILE), JSON.stringify(store, null, 2) + '\n', 0o600);
+}
+
+/**
+ * Mutate the store against a FRESH read, not the caller's copy. The poller
+ * and the enrollment CLI both run read-modify-write on this file with nothing
+ * serializing them; a poll holding a minutes-old store would otherwise
+ * clobber an enrollment that landed mid-poll (review, 2026-08-12: reproduced
+ * both interleavings; one bricked an account onto a dead refresh token).
+ * `mutate` gets the fresh store and returns the store to write. The residual
+ * window is the write itself, which rename makes atomic — two writers can
+ * still interleave within milliseconds, and last-write-wins there; that is a
+ * manual enrollment racing a 300s poll, not a steady-state hazard.
+ */
+export async function updateTokenStore(dataDir, mutate) {
+  const fresh = (await readTokenStore(dataDir)) ?? { schema: 1, accounts: [] };
+  await writeTokenStore(dataDir, mutate(fresh));
 }
 
 /** Tmp file + rename in the same directory: a reader never sees a half file. */
@@ -255,8 +282,12 @@ const uuidByToken = new Map();
 /** The access token in the default profile's Keychain entry, or null. */
 async function defaultProfileToken(execImpl) {
   try {
+    // The timeout is load-bearing: a locked keychain awaiting a prompt that
+    // can never be answered would otherwise hang this exec, pin the poller's
+    // inFlight guard, and silently stop every later poll.
     const { stdout } = await execImpl('security',
-      ['find-generic-password', '-s', 'Claude Code-credentials', '-w']);
+      ['find-generic-password', '-s', 'Claude Code-credentials', '-w'],
+      { timeout: 10_000 });
     const oauth = JSON.parse(stdout.trim())?.claudeAiOauth;
     return typeof oauth?.accessToken === 'string' && oauth.accessToken ? oauth.accessToken : null;
   } catch {
@@ -305,6 +336,9 @@ async function resolveCurrentAccount(store, { fetchImpl, execImpl, log }) {
     if (!uuid) {
       uuid = await uuidForToken(token, fetchImpl);
       if (!uuid) return { id: null, dirty: false };
+      // One cache entry per CLI token rotation; the daemon lives for months,
+      // so the map gets a ceiling rather than growing by one entry a day.
+      if (uuidByToken.size > 200) uuidByToken.clear();
       uuidByToken.set(token, uuid);
     }
     let dirty = false;
@@ -430,9 +464,13 @@ export async function pollOnce({
     return { wrote: false, reason: 'unreadable', accounts: 0 };
   }
   if (!store || store.accounts.length === 0) {
-    log('[vault-hud] usage: no accounts enrolled; nothing to poll (node usage-enroll.js add …)\n');
+    if (!noAccountsLogged) {
+      log('[vault-hud] usage: no accounts enrolled; nothing to poll (node usage-enroll.js add …)\n');
+      noAccountsLogged = true;
+    }
     return { wrote: false, reason: 'no-accounts', accounts: 0 };
   }
+  noAccountsLogged = false;
   const deps = { fetchImpl, now, sleep, log };
   const entries = [];
   for (const [i, account] of store.accounts.entries()) {
@@ -444,10 +482,21 @@ export async function pollOnce({
     entries.push(entry);
     if (rotated) {
       // The old refresh token is already dead; this write is the only copy of
-      // the live one, so it happens before the next account is touched.
+      // the live one, so it happens before the next account is touched. The
+      // persist merges against a fresh read: an enrollment landing mid-poll
+      // must not be clobbered by the store this poll started with.
       store.accounts[i] = rotated;
       try {
-        await writeTokenStore(dataDir, store);
+        await updateTokenStore(dataDir, (fresh) => {
+          const idx = fresh.accounts.findIndex((a) => a.id === rotated.id);
+          if (idx === -1) return fresh; // the account was removed mid-poll; respect that
+          // Another writer rotated or re-enrolled this account mid-poll: the
+          // on-disk bundle no longer descends from the token this poll read,
+          // so it is the newer lineage and wins.
+          if (fresh.accounts[idx].refreshToken !== account.refreshToken) return fresh;
+          fresh.accounts[idx] = rotated;
+          return fresh;
+        });
       } catch (err) {
         log(`[vault-hud] usage: could not persist rotated tokens for ${entry.id}: ${err.message}\n`);
       }
@@ -456,7 +505,17 @@ export async function pollOnce({
   const current = await resolveCurrentAccount(store, { fetchImpl, execImpl, log });
   if (current.dirty) {
     try {
-      await writeTokenStore(dataDir, store);
+      // Identity backfill contributes the uuid ONLY: token fields on disk may
+      // be newer than this poll's read (a rotation, an enrollment), and
+      // clobbering them is the lost-update race this merge exists to prevent.
+      await updateTokenStore(dataDir, (fresh) => {
+        for (const acc of store.accounts) {
+          if (!acc.uuid) continue;
+          const onDisk = fresh.accounts.find((a) => a.id === acc.id);
+          if (onDisk && !onDisk.uuid) onDisk.uuid = acc.uuid;
+        }
+        return fresh;
+      });
     } catch (err) {
       log(`[vault-hud] usage: could not persist account uuids: ${err.message}\n`);
     }

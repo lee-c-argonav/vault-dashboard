@@ -273,8 +273,13 @@ function renderUsage(state) {
 
   const sig = JSON.stringify([
     view.updated, view.isStale, view.staleMinutes, view.currentId, view.verdict,
-    view.accounts.map((a) => [a.id, a.state, a.error, a.fiveHourPct, a.fiveHourResetsAt,
-      a.sevenDayPct, a.opusPct, a.sonnetPct, a.fablePct, a.spent5h, a.out, a.capAt]),
+    view.accounts.map((a) => [a.id, a.label, a.plan, a.state, a.error,
+      a.fiveHourPct, a.fiveHourResetsAt, a.sevenDayPct, a.sevenDayResetsAt,
+      a.opusPct, a.sonnetPct, a.fablePct, a.fableResetsAt, a.out,
+      // The cap projection derives from the clock, so a raw ISO would churn
+      // the signature on every render; minute granularity is what the row
+      // shows anyway.
+      a.capAt ? Math.floor(Date.parse(a.capAt) / 60_000) : null]),
     Math.floor(now / 60_000),
   ]);
   if (sig !== usageSig) {
@@ -315,7 +320,7 @@ function renderUsage(state) {
     } else {
       eyebrow.textContent = 'ALL SPENT';
       line.textContent = v.nextFree ? v.nextFree.label : 'NO RESET IN SIGHT';
-      line.title = 'Every account is used up';
+      line.title = v.nextFree ? v.nextFree.label : 'Every account is used up';
       sub.textContent = v.nextFree
         ? `frees in ${humanMs(Date.parse(v.nextFree.at) - now)}` : '';
     }

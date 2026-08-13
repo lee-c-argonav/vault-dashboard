@@ -96,7 +96,7 @@ test('the projection rounds, buckets and drops, exactly like the other public fi
   const u = toPublicBoard(usageBoard(), NOW).usage;
   const [a, b] = u.accounts;
   assert.equal(a.fiveHour.utilization, 42, '42.4 must publish as 42');
-  assert.equal(a.sevenDay.utilization, 19, '18.6 must publish as 19');
+  assert.equal(a.sevenDay.utilization, 18, '18.6 must publish as 18: floored, so the phone agrees with the raw desktop at every integer threshold');
   assert.equal(a.fiveHour.resetsAt, '2026-08-12T19:55:00.000Z',
     'resets-at floored to its five-minute bucket');
   assert.equal(u.updated, '2026-08-12T17:55:00.000Z', 'board stamp bucketed the same way');
@@ -201,7 +201,7 @@ test('the rendered section leads with the verdict, then one row per account', as
       );
       // Rounded by the projection before the view ever saw it.
       assert.ok(html.includes('5h 42%'), 'the 5h quota did not render rounded');
-      assert.ok(html.includes('7d 19% ↻ Aug 19'), 'the 7d quota lost its reset date');
+      assert.ok(html.includes('7d 18% ↻ Aug 19'), 'the 7d quota lost its reset date');
       assert.ok(/fab 4% ↻ Aug 1[34]/.test(html), 'the Fable window lost its reset date');
       assert.ok(html.includes('↻'), 'no reset time rendered');
       assert.ok(html.includes('AUTH EXPIRED'), 'a non-ok account carried no state chip');
@@ -227,7 +227,7 @@ test('a current account with headroom reads as fine, with no action word', async
   try {
     await withUsageFile(calm, async () => {
       const html = await readFile(await build({ vault, outDir: out, now: NOW, sessions: [] }), 'utf8');
-      assert.ok(html.includes('<b>alpha</b> is fine · 5h 42% · 7d 19%'), 'no stay verdict');
+      assert.ok(html.includes('<b>alpha</b> is fine · 5h 42% · 7d 18%'), 'no stay verdict');
       assert.ok(!html.includes('Switch to'), 'a calm board asked for a switch');
       assert.ok(html.includes('CURRENT'), 'the current account is not marked');
     });
@@ -305,22 +305,28 @@ test('stale data says so, as a floor claim rather than a freezing counter', asyn
 });
 
 test('a same-day weekly reset shows the time only; a later week stays a bare date', async () => {
-  const todayReset = usageFixture();
-  todayReset.accounts[0].sevenDay = { utilization: 18.6, resetsAt: '2026-08-12T21:03:00Z' };
+  // Constructed in LOCAL time so the day comparison holds in every timezone:
+  // noon and 21:03 on the same local calendar day, with beta's weekly reset
+  // at local noon on the 18th. (Fixed-Z instants fail this test in timezones
+  // where noon Z and 21:03 Z land on different local days.)
+  const localNoon = new Date(2026, 7, 12, 12, 0, 0);
+  const laterToday = new Date(2026, 7, 12, 21, 3, 0);
+  const fix = usageFixture();
+  fix.updated = localNoon.toISOString();
+  fix.accounts[0].sevenDay = { utilization: 18.6, resetsAt: laterToday.toISOString() };
+  fix.accounts[1].sevenDay = { utilization: 97.5, resetsAt: new Date(2026, 7, 18, 12, 0, 0).toISOString() };
   const vault = await makeVault();
   const out = await mkdtemp(join(tmpdir(), 'vh-usage-out-'));
   try {
-    await withUsageFile(todayReset, async () => {
-      const html = await readFile(await build({ vault, outDir: out, now: NOW, sessions: [] }), 'utf8');
-      // NOW is 2026-08-12T18:00Z: the reset is later the same date, so the
-      // time IS the answer and the date is dropped (operator call 2026-08-12).
-      // The bucketed 21:03 → 21:00Z prints as a local HH:MM, which varies by
-      // machine timezone, hence the shape match.
-      assert.match(html, /7d 19% ↻ \d{2}:\d{2}/, 'a same-day reset did not show its time');
+    await withUsageFile(fix, async () => {
+      const html = await readFile(await build({ vault, outDir: out, now: localNoon.getTime(), sessions: [] }), 'utf8');
+      // The reset is later the same local date, so the time IS the answer and
+      // the date is dropped (operator call 2026-08-12).
+      assert.match(html, /7d 18% ↻ \d{2}:\d{2}/, 'a same-day reset did not show its time');
       assert.ok(!html.includes('↻ Aug 12'), 'a same-day reset kept the date');
       // Beta's reset is the 18th — not today, so it stays a bare date.
       assert.ok(html.includes('↻ Aug 18'), 'a later-week reset lost its date');
-      assert.ok(!/Aug 1[89] \d{2}:\d{2}/.test(html), 'a later-week reset carried a time');
+      assert.ok(!/Aug 18 \d{2}:\d{2}/.test(html), 'a later-week reset carried a time');
     });
   } finally {
     await rm(vault, { recursive: true, force: true });

@@ -203,6 +203,34 @@ test('97.9% is still usable: the out line is 98, not "near 98"', () => {
   assert.equal(v.verdict.target.id, 'widget');
 });
 
+test('cool accounts outrank hot ones even when the hot one has the lighter session', () => {
+  // Pins the cool-first sort term: pure session ranking would take widget
+  // (30 < 70), and steering spend into a 95% week is the failure the term
+  // exists to prevent.
+  const v = usageView(board([
+    acct({ id: 'widget', label: 'widget',
+      fiveHour: { utilization: 30, resetsAt: iso(T0 + 3 * H) },
+      sevenDay: { utilization: 95, resetsAt: iso(T0 + 24 * H) } }),
+    acct({ id: 'sprocket', label: 'sprocket',
+      fiveHour: { utilization: 70, resetsAt: iso(T0 + 3 * H) },
+      sevenDay: { utilization: 10, resetsAt: iso(T0 + 4 * 24 * H) } }),
+  ]), T0);
+  assert.equal(v.verdict.target.id, 'sprocket');
+});
+
+test('nextFree names the binding reset: a spent week frees at the weekly reset', () => {
+  // The 5h window resets first, but nothing frees then — the week is the
+  // binding constraint.
+  const v = usageView(board([
+    acct({ id: 'widget', label: 'widget',
+      fiveHour: { utilization: 10, resetsAt: iso(T0 + 2 * H) },
+      sevenDay: { utilization: 100, resetsAt: iso(T0 + 3 * 24 * H) } }),
+  ]), T0);
+  assert.equal(v.verdict.kind, 'spent');
+  assert.deepEqual(v.verdict.nextFree,
+    { id: 'widget', label: 'widget', at: iso(T0 + 3 * 24 * H) });
+});
+
 test('every account at 98%+ is spent, with the earliest reset named', () => {
   const v = usageView(board([
     acct({ id: 'widget', label: 'widget', fiveHour: { utilization: 98, resetsAt: iso(T0 + 2 * H) } }),
