@@ -887,11 +887,17 @@ function ranFor(r) {
  * every stamp to five minutes, so no clock printed here can claim a precision
  * the deploy cadence cannot keep.
  */
-/** A weekly reset reads as a date, a fixed fact on the same footing as clockAt. */
-const dayMon = (iso) => {
+/** A weekly reset reads as a date — but as a bare clock time when that date
+ *  is today, where the time is the whole answer. Same fixed-fact footing as
+ *  clockAt. */
+const dayMon = (iso, now) => {
   const t = Date.parse(iso ?? '');
-  return Number.isFinite(t)
-    ? new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+  if (!Number.isFinite(t)) return '';
+  const d = new Date(t);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  if (d.toDateString() === new Date(now).toDateString()) return `${hh}:${mm}`;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 };
 
 function usageSection(usage, now) {
@@ -942,11 +948,14 @@ function usageSection(usage, now) {
       : `<span class="qchip"${a.error ? ` title="${esc(a.error)}"` : ''}>${
           esc(a.state.replace(/_/g, ' ').toUpperCase())}</span>`;
     const current = view.currentId === a.id && a.id ? '<span class="qchip">CURRENT</span>' : '';
+    // Out leads the chips: past 98% on either bucket the account is unusable
+    // right now, and that fact outranks where the CLI happens to point.
+    const out = a.out ? '<span class="qchip">✕ OUT</span>' : '';
     return `<div class="qrow">` +
-      `<span class="qlab">${esc(a.id)}</span>${chip}${current}` +
+      `<span class="qlab">${esc(a.id)}</span>${out}${chip}${current}` +
       `<span class="qnum">5h ${pct(a.fiveHourPct)}${reset ? ` ↻ ${esc(reset)}` : ''}</span>` +
-      `<span class="qnum">7d ${pct(a.sevenDayPct)}${a.sevenDayResetsAt ? ` ↻ ${esc(dayMon(a.sevenDayResetsAt))}` : ''}</span>` +
-      (a.fablePct != null ? `<span class="qnum">fab ${pct(a.fablePct)}${a.fableResetsAt ? ` ↻ ${esc(dayMon(a.fableResetsAt))}` : ''}</span>` : '') +
+      `<span class="qnum">7d ${pct(a.sevenDayPct)}${a.sevenDayResetsAt ? ` ↻ ${esc(dayMon(a.sevenDayResetsAt, now))}` : ''}</span>` +
+      (a.fablePct != null ? `<span class="qnum">fab ${pct(a.fablePct)}${a.fableResetsAt ? ` ↻ ${esc(dayMon(a.fableResetsAt, now))}` : ''}</span>` : '') +
       `</div>`;
   }).join('');
   return `<section class="quota" aria-label="Claude subscription usage">` +

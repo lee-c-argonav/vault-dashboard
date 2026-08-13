@@ -304,6 +304,46 @@ test('stale data says so, as a floor claim rather than a freezing counter', asyn
   }
 });
 
+test('a same-day weekly reset shows the time only; a later week stays a bare date', async () => {
+  const todayReset = usageFixture();
+  todayReset.accounts[0].sevenDay = { utilization: 18.6, resetsAt: '2026-08-12T21:03:00Z' };
+  const vault = await makeVault();
+  const out = await mkdtemp(join(tmpdir(), 'vh-usage-out-'));
+  try {
+    await withUsageFile(todayReset, async () => {
+      const html = await readFile(await build({ vault, outDir: out, now: NOW, sessions: [] }), 'utf8');
+      // NOW is 2026-08-12T18:00Z: the reset is later the same date, so the
+      // time IS the answer and the date is dropped (operator call 2026-08-12).
+      // The bucketed 21:03 → 21:00Z prints as a local HH:MM, which varies by
+      // machine timezone, hence the shape match.
+      assert.match(html, /7d 19% ↻ \d{2}:\d{2}/, 'a same-day reset did not show its time');
+      assert.ok(!html.includes('↻ Aug 12'), 'a same-day reset kept the date');
+      // Beta's reset is the 18th — not today, so it stays a bare date.
+      assert.ok(html.includes('↻ Aug 18'), 'a later-week reset lost its date');
+      assert.ok(!/Aug 1[89] \d{2}:\d{2}/.test(html), 'a later-week reset carried a time');
+    });
+  } finally {
+    await rm(vault, { recursive: true, force: true });
+    await rm(out, { recursive: true, force: true });
+  }
+});
+
+test('an account at 98%+ wears the OUT chip on the page', async () => {
+  const outBoard = usageFixture();
+  outBoard.accounts[0].fiveHour = { utilization: 98.4, resetsAt: '2026-08-12T21:03:00Z' };
+  const vault = await makeVault();
+  const out = await mkdtemp(join(tmpdir(), 'vh-usage-out-'));
+  try {
+    await withUsageFile(outBoard, async () => {
+      const html = await readFile(await build({ vault, outDir: out, now: NOW, sessions: [] }), 'utf8');
+      assert.ok(html.includes('✕ OUT'), 'no out chip at 98%');
+    });
+  } finally {
+    await rm(vault, { recursive: true, force: true });
+    await rm(out, { recursive: true, force: true });
+  }
+});
+
 test('an all-spent board says when an account frees instead of recommending one', async () => {
   const spent = usageFixture();
   spent.accounts[0].fiveHour = { utilization: 100, resetsAt: '2026-08-12T21:03:00Z' };

@@ -165,14 +165,51 @@ test('at the threshold exactly, the account counts as over the line', () => {
 });
 
 test('a hot current that is still the best available says stay, hot', () => {
+  // 95% is over the switch line but under the 98% out line: usable, barely.
   const v = usageView(board([
-    acct({ id: 'widget', label: 'widget', fiveHour: { utilization: 99, resetsAt: iso(T0 + 3 * H) } }),
+    acct({ id: 'widget', label: 'widget', fiveHour: { utilization: 95, resetsAt: iso(T0 + 3 * H) } }),
     acct({ id: 'sprocket', label: 'sprocket', fiveHour: { utilization: 100, resetsAt: iso(T0 + 3 * H) } }),
     acct({ id: 'laptop', label: 'laptop', state: 'auth_expired', fiveHour: null, sevenDay: null }),
   ], { currentAccountId: 'widget' }), T0);
   assert.equal(v.verdict.kind, 'stay');
   assert.equal(v.verdict.currentHot, true);
   assert.equal(v.verdict.target, null);
+});
+
+test('at 98% on either bucket the account is out, and never a switch target', () => {
+  const v = usageView(board([
+    acct({ id: 'widget', label: 'widget',
+      fiveHour: { utilization: 98, resetsAt: iso(T0 + 3 * H) } }),
+    acct({ id: 'sprocket', label: 'sprocket',
+      fiveHour: { utilization: 40, resetsAt: iso(T0 + 3 * H) },
+      sevenDay: { utilization: 98, resetsAt: iso(T0 + 24 * H) } }),
+    acct({ id: 'laptop', label: 'laptop',
+      fiveHour: { utilization: 60, resetsAt: iso(T0 + 3 * H) } }),
+  ], { currentAccountId: 'widget' }), T0);
+  assert.equal(v.accounts[0].out, true, '98% session is out');
+  assert.equal(v.accounts[1].out, true, '98% week is out');
+  assert.equal(v.accounts[2].out, false);
+  assert.equal(v.verdict.kind, 'switch');
+  assert.equal(v.verdict.target.id, 'laptop',
+    'the only account with real headroom, not the 40%-session one whose week is gone');
+});
+
+test('97.9% is still usable: the out line is 98, not "near 98"', () => {
+  const v = usageView(board([
+    acct({ id: 'widget', label: 'widget', fiveHour: { utilization: 97.9, resetsAt: iso(T0 + 3 * H) } }),
+  ]), T0);
+  assert.equal(v.accounts[0].out, false);
+  assert.equal(v.verdict.kind, 'best');
+  assert.equal(v.verdict.target.id, 'widget');
+});
+
+test('every account at 98%+ is spent, with the earliest reset named', () => {
+  const v = usageView(board([
+    acct({ id: 'widget', label: 'widget', fiveHour: { utilization: 98, resetsAt: iso(T0 + 2 * H) } }),
+    acct({ id: 'sprocket', label: 'sprocket', fiveHour: { utilization: 99, resetsAt: iso(T0 + min(41)) } }),
+  ]), T0);
+  assert.equal(v.verdict.kind, 'spent');
+  assert.deepEqual(v.verdict.nextFree, { id: 'sprocket', label: 'sprocket', at: iso(T0 + min(41)) });
 });
 
 test('a current that is not reporting is switched away from', () => {

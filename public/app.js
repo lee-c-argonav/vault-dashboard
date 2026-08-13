@@ -155,11 +155,16 @@ function usageRow(key, valuePct, barCls, hot, rightText, rightTitle, rightCls) {
   return row;
 }
 
-/** A weekly reset reads as a date: a weekday made the operator ask which week. */
-function usageDayAt(iso) {
+/** A weekly reset reads as a date — but as a bare clock time when that date
+ *  is today, where the time is the whole answer (operator call 2026-08-12:
+ *  "if it's the current date then just show a time and not a date"). */
+function usageDayAt(iso, now) {
   const d = new Date(iso);
-  return Number.isFinite(d.getTime())
-    ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase() : '';
+  if (!Number.isFinite(d.getTime())) return '';
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  if (d.toDateString() === new Date(now).toDateString()) return `${hh}:${mm}`;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase();
 }
 
 /**
@@ -175,12 +180,19 @@ function usageCell(a, view, now) {
   const isCurrent = Boolean(a.id) && view.currentId === a.id;
   const isTarget = Boolean(a.id) && view.verdict.target?.id === a.id
     && (view.verdict.kind === 'switch' || view.verdict.kind === 'best');
-  const cell = el('div', 'uacct' + (a.spent5h ? ' is-spent' : ''));
+  const cell = el('div', 'uacct' + (a.out ? ' is-spent' : ''));
 
   const head = el('div', 'uacct-head');
   const label = el('span', 'uacct-label', a.label || '—');
   label.title = a.plan ? `${a.label} · ${a.plan}` : a.label;
   head.append(label);
+  // Out leads the chips: past 98% on either bucket the account is unusable
+  // right now, and that fact outranks where the CLI happens to point.
+  if (a.out) {
+    const outChip = el('span', 'uchip is-out', '✕ OUT');
+    outChip.title = 'At 98% or more of the session or weekly window; what is left is minutes.';
+    head.append(outChip);
+  }
   if (isCurrent) head.append(el('span', 'uchip', 'current'));
   if (isTarget) head.append(el('span', 'uchip is-target', 'target'));
   cell.append(head);
@@ -213,12 +225,12 @@ function usageCell(a, view, now) {
     a.capAt ? 'is-cap' : ''));
   rows.append(usageRow('7D', a.sevenDayPct, 'ubar7',
     a.sevenDayPct != null && a.sevenDayPct >= SWITCH_WEEK_PCT,
-    a.sevenDayResetsAt ? `reset ${usageDayAt(a.sevenDayResetsAt)}` : ''));
+    a.sevenDayResetsAt ? `reset ${usageDayAt(a.sevenDayResetsAt, now)}` : ''));
   // Fable rides its own weekly window, shown only when the account reports
   // one: an always-on slot would sit empty on most plans and read as broken.
   if (a.fablePct != null) {
     rows.append(usageRow('FAB', a.fablePct, 'ubar7', a.fablePct >= SWITCH_WEEK_PCT,
-      a.fableResetsAt ? `reset ${usageDayAt(a.fableResetsAt)}` : '', 'Fable weekly window'));
+      a.fableResetsAt ? `reset ${usageDayAt(a.fableResetsAt, now)}` : '', 'Fable weekly window'));
   }
   const extra = [];
   if (a.opusPct != null) extra.push(`opus ${usagePct(a.opusPct)}`);
@@ -262,7 +274,7 @@ function renderUsage(state) {
   const sig = JSON.stringify([
     view.updated, view.isStale, view.staleMinutes, view.currentId, view.verdict,
     view.accounts.map((a) => [a.id, a.state, a.error, a.fiveHourPct, a.fiveHourResetsAt,
-      a.sevenDayPct, a.opusPct, a.sonnetPct, a.fablePct, a.spent5h, a.capAt]),
+      a.sevenDayPct, a.opusPct, a.sonnetPct, a.fablePct, a.spent5h, a.out, a.capAt]),
     Math.floor(now / 60_000),
   ]);
   if (sig !== usageSig) {

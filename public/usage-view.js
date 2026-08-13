@@ -66,6 +66,7 @@ function accountView(a, nowMs) {
   const state = STATES.has(a?.state) ? a.state : 'error';
   const fiveHourPct = pct(a?.fiveHour?.utilization);
   const fiveHourResetsAt = isoOrNull(a?.fiveHour?.resetsAt);
+  const sevenDayPct = pct(a?.sevenDay?.utilization);
   return {
     id: str(a?.id),
     label: str(a?.label),
@@ -74,13 +75,16 @@ function accountView(a, nowMs) {
     error: typeof a?.error === 'string' ? a.error : null,
     fiveHourPct,
     fiveHourResetsAt,
-    sevenDayPct: pct(a?.sevenDay?.utilization),
+    sevenDayPct,
     sevenDayResetsAt: isoOrNull(a?.sevenDay?.resetsAt),
     opusPct: pct(a?.sevenDayOpus?.utilization),
     sonnetPct: pct(a?.sevenDaySonnet?.utilization),
     fablePct: pct(a?.sevenDayFable?.utilization),
     fableResetsAt: isoOrNull(a?.sevenDayFable?.resetsAt),
     spent5h: fiveHourPct != null && fiveHourPct >= 100,
+    // Out in practice, either bucket: at 98% the remainder is minutes.
+    out: (fiveHourPct != null && fiveHourPct >= OUT_PCT)
+      || (sevenDayPct != null && sevenDayPct >= OUT_PCT),
     capAt: capAtFor(fiveHourPct, fiveHourResetsAt, nowMs),
   };
 }
@@ -113,10 +117,14 @@ function accountView(a, nowMs) {
  */
 export const SWITCH_SESSION_PCT = 80;
 export const SWITCH_WEEK_PCT = 90;
+// At 98% an account is out in practice: the remaining headroom is minutes,
+// so it drops out of switch targets and its cell carries the ✕ OUT mark.
+// (Operator call, 2026-08-12: at this reading the account "is not usable".)
+export const OUT_PCT = 98;
 
 const available = (a) => a.state === 'ok'
-  && a.fiveHourPct != null && a.fiveHourPct < 100
-  && (a.sevenDayPct == null || a.sevenDayPct < 100);
+  && a.fiveHourPct != null && a.fiveHourPct < OUT_PCT
+  && (a.sevenDayPct == null || a.sevenDayPct < OUT_PCT);
 const hot = (a) => (a.fiveHourPct != null && a.fiveHourPct >= SWITCH_SESSION_PCT)
   || (a.sevenDayPct != null && a.sevenDayPct >= SWITCH_WEEK_PCT);
 

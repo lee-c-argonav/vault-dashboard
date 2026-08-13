@@ -500,6 +500,9 @@ body {
   color: var(--dim);
 }
 .uchip.is-target { color: var(--orange); border-color: var(--orange-dim); }
+/* Out is terminal, not a warning: dim, where amber would keep asking for a
+   glance the account cannot repay. */
+.uchip.is-out { color: var(--dim); border-color: var(--dimmer); }
 /* The one freshness claim, stated only when the figures are not fresh. */
 .uchip.is-stale { color: var(--amber); border-color: var(--amber); }
 
