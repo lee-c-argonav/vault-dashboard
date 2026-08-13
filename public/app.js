@@ -638,32 +638,29 @@ function unitList(units, now) {
 }
 
 /**
- * The context-window meter: recent fill as bars, the current percentage, and
- * a warning mark once it crosses 80%. One element for both row kinds — a run
- * row gets its linked session's meter, a standalone session row its own.
- * Bars are fractions of the window itself, so the shape reads absolutely and
- * the top of the track is the ceiling. Null when nothing was read.
+ * The context-window meter: one fill left to right, 0 to 100 of the believed
+ * window, the current percentage, and a warning mark once it crosses 80%. One
+ * element for both row kinds — a run row gets its linked session's meter, a
+ * standalone session row its own. The fill replaces the 36-bar time series
+ * (2026-08-12, operator): its heights sat in a narrow band and its gap slots
+ * read as a broken widget. Null when nothing was read.
  */
 function ctxMeter(ctx) {
   const c = contextOf(ctx);
   if (!c) return null;
   const m = el('span', `ctxm${c.hot ? ' is-hot' : ''}`);
-  const bars = el('span', 'ctxm-bars');
-  for (const p of c.points) {
-    // A hole in the sample record gets an empty slot, not a bar: the break
-    // is part of what happened.
-    if (p.gap) bars.append(el('i', 'ctxm-g'));
-    const b = el('i', 'ctxm-b');
-    // 9% of the 11px track is 1px: a near-empty window is still a visible tick.
-    b.style.height = `${Math.max(9, p.f * 100).toFixed(1)}%`;
-    bars.append(b);
-  }
-  m.append(bars);
+  const track = el('span', 'ctxm-track');
+  const fill = el('i');
+  // Past 100 clamps the fill but never the figure: an over-100 reading means
+  // the believed window is wrong, and that is a fact worth surfacing.
+  fill.style.width = `${Math.max(0, Math.min(100, c.pct))}%`;
+  track.append(fill);
+  m.append(track);
   m.append(el('span', 'ctxm-pct', `${c.pct}%`));
   if (c.hot) m.append(el('span', 'ctxm-warn', '▲'));
   const tok = (v) => (v >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : `${Math.round(v / 1e3)}k`);
   m.title = `Context ${c.pct}% full — ${tok(c.used)} of ${tok(c.max)} tokens. `
-    + 'Bars are the fill over recent time; the top of the track is the window.'
+    + 'The track fills left to right toward the window.'
     + (c.hot ? ' Past 80%: compaction is close.' : '');
   return m;
 }
