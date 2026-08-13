@@ -237,6 +237,10 @@
   <span class="rule-fill"></span>
   <span class="foot-path" id="foot-path"></span>
   <span class="foot-sync" id="foot-sync"></span>
+  <!-- Shown only when the backend booted after this page loaded: fresh State
+       through stale renderers is an otherwise invisible failure. -->
+  <span class="link-stale" id="link-stale" hidden
+        title="The HUD backend restarted after this page loaded, so the page may be running older code. Reload with Cmd+R.">RELOAD</span>
   <span class="link-state" id="link-state"><span class="lamp"></span><span id="link-text">BOOT</span></span>
 </footer>
 

@@ -163,3 +163,14 @@ test('the boot state carries usage: null, so the shape never changes', () => {
   assert.ok(/usage:\s*null/.test(boot),
     'bootState lost usage: null — app.js would read undefined before the first parse');
 });
+
+test('every served State carries the server boot stamp, and the page checks it', () => {
+  // The trap this closes: a restart swaps the static files under an
+  // already-open page, and fresh State renders fine through stale renderers —
+  // invisible until someone reports the board not updating (2026-08-13).
+  assert.match(SERVER, /serverStartedAt: BOOTED_AT/,
+    'publish() no longer stamps the served JSON with the boot time');
+  const app = readFileSync(join(ROOT, 'public', 'app.js'), 'utf8');
+  assert.match(app, /PAGE_LOADED_AT/, 'app.js has no page-load reference point');
+  assert.match(app, /renderStaleness\(/, 'the staleness check is never rendered');
+});

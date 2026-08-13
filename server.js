@@ -51,6 +51,11 @@ const TRANSCRIPT_ROOT = process.env.VAULT_HUD_CLAUDE_HOME
 const KEEPALIVE_MS = 25_000;
 const WATCH_RETRY_MIN_MS = 500;
 const WATCH_RETRY_MAX_MS = 8_000;
+/** When this process booted. Served with every State frame (see publish): a
+ *  page loaded before this stamp may be running older static JS against fresh
+ *  State, a failure that is otherwise invisible because fresh data renders
+ *  fine through stale renderers. */
+const BOOTED_AT = new Date().toISOString();
 
 const EXCLUDED_DIRS = new Set(['99-Archive', '_to_delete', 'node_modules']);
 
@@ -111,7 +116,11 @@ function localDate(d) {
 
 function publish(state) {
   current = state;
-  currentJson = JSON.stringify(state);
+  // The boot stamp rides the served JSON rather than the State object: State
+  // never carries a clock field, and a constant value cannot churn the
+  // client's diff either way — but keeping it out of the stored object keeps
+  // the doctrine legible.
+  currentJson = JSON.stringify({ ...state, serverStartedAt: BOOTED_AT });
   broadcast(currentJson);
 }
 

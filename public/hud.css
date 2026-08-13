@@ -1238,6 +1238,18 @@ body {
 .link-state.live { color: var(--orange); }
 .link-state.live .lamp { background: var(--orange); animation: breathe 2s ease-in-out infinite; }
 
+/* Beside the lamp, only when the backend booted after this page loaded: the
+   page may be running stale renderers, and that is worth amber. */
+.link-stale {
+  flex: 0 0 auto;
+  font: 8px/1 var(--mono);
+  letter-spacing: .12em;
+  color: var(--amber);
+  border: 1px solid var(--amber);
+  padding: 3px 5px;
+  white-space: nowrap;
+}
+
 @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
 
 @media (prefers-reduced-motion: reduce) {

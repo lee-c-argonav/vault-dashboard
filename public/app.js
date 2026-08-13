@@ -1683,12 +1683,29 @@ function render(state) {
   renderLattice(state);
   renderWarnings(state);
   renderFooter(state);
+  renderStaleness(state);
 }
 
 function setLink(live) {
   const node = $('link-state');
   node.classList.toggle('live', live);
   $('link-text').textContent = live ? 'LIVE' : 'OFFLINE';
+}
+
+/** When this page's JS was loaded. Compared against the server's boot stamp. */
+const PAGE_LOADED_AT = Date.now();
+
+/**
+ * A server that booted after this page loaded means the code may have changed
+ * under the page: fresh State keeps rendering through stale renderers, so the
+ * failure is invisible unless it is named. This exact trap has been recorded
+ * in the hub twice; the chip beside the link lamp is the tell.
+ */
+function renderStaleness(state) {
+  const node = $('link-stale');
+  if (!node) return;
+  const booted = Date.parse(state?.serverStartedAt ?? '');
+  node.hidden = !(Number.isFinite(booted) && booted > PAGE_LOADED_AT);
 }
 
 async function loadState() {
