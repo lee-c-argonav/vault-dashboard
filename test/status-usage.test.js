@@ -199,16 +199,26 @@ test('the rendered section leads with the verdict, then one row per account', as
         html.indexOf('class="qrec"') < html.indexOf('class="qrow"'),
         'the account rows rendered above the verdict',
       );
-      // Rounded by the projection before the view ever saw it.
-      assert.ok(html.includes('5h 42%'), 'the 5h quota did not render rounded');
-      assert.ok(html.includes('7d 18% ↻ Aug 19'), 'the 7d quota lost its reset date');
-      assert.ok(/fab 4% ↻ Aug 1[34]/.test(html), 'the Fable window lost its reset date');
-      assert.ok(html.includes('↻'), 'no reset time rendered');
+      // The one thing this redesign removed: per-row resets. Scoped to the
+      // section because the footer's reload affordance carries a ↻ of its own.
+      const quotaBlock = html.slice(html.indexOf('class="quota'), html.indexOf('</section>'));
+      assert.ok(!quotaBlock.includes('↻'), 'a per-row reset crept back into the quota table');
+      // Floored by the projection before the view ever saw it, in a table with
+      // labeled columns and no per-row resets — those wrapped the id and
+      // clipped the figures at phone width (operator report, 2026-08-13).
+      assert.ok(html.includes('>5H<') && html.includes('>7D<') && html.includes('>FAB<'),
+        'the quota table lost its column labels');
+      assert.ok(/<span class="qlab"[^>]*>alpha<\/span>.*?42%.*?18%.*?4%/s.test(html),
+        "alpha's quotas did not render in column order");
       assert.ok(html.includes('AUTH EXPIRED'), 'a non-ok account carried no state chip');
       assert.ok(!html.includes('17:58:2'), 'a per-account poll stamp reached the page');
       // The section sits above the board: the answer is wanted before it.
+      // The needle stops before the closing quote: the section carries a
+      // conditional `with-fab` class, and `class="quota"` (with quote) is -1
+      // whenever it does — a -1 index passes this comparison forever.
       assert.ok(
-        html.indexOf('class="quota"') < html.indexOf('No run is publishing'),
+        html.indexOf('class="quota') > -1
+          && html.indexOf('class="quota') < html.indexOf('No run is publishing'),
         'the usage section rendered below the runs',
       );
       assert.ok(!html.includes('STALE'), 'fresh data was marked stale');
@@ -252,9 +262,11 @@ test('a current account over the line is told where to switch and why', async ()
   try {
     await withUsageFile(hot, async () => {
       const html = await readFile(await build({ vault, outDir: out, now: NOW, sessions: [] }), 'utf8');
-      // 93.2 rounds to 93 by the projection before the view reads it.
+      // 93.2 floors to 93 by the projection before the view reads it. The
+      // assertion needles the verdict markup (`</b> is fine`), never a bare
+      // phrase: stylesheet rules and comments are page text too.
       assert.ok(html.includes('Switch to <b>beta</b> · alpha at 93% session'), 'no switch verdict');
-      assert.ok(!html.includes('is fine'), 'a hot current was called fine');
+      assert.ok(!html.includes('</b> is fine'), 'a hot current was called fine');
     });
   } finally {
     await rm(vault, { recursive: true, force: true });
@@ -269,18 +281,18 @@ test('the section is hidden when usage.json is absent, broken, or empty', async 
     // Absent: the normal state of a machine that never enrolled. Not an error.
     await withUsageFile(null, async () => {
       const html = await readFile(await build({ vault, outDir: out, now: NOW, sessions: [] }), 'utf8');
-      assert.ok(!html.includes('class="quota"'), 'an absent file rendered a section');
+      assert.ok(!html.includes('class="quota'), 'an absent file rendered a section');
       assert.ok(html.includes('No run is publishing'), 'the board itself failed to render');
     });
     // Broken: present but unparseable. Same absence, never a build failure.
     await withUsageFile('{ not json', async () => {
       const html = await readFile(await build({ vault, outDir: out, now: NOW, sessions: [] }), 'utf8');
-      assert.ok(!html.includes('class="quota"'), 'a broken file rendered a section');
+      assert.ok(!html.includes('class="quota'), 'a broken file rendered a section');
     });
     // Enrolled to zero accounts.
     await withUsageFile({ schema: 1, updated: '2026-08-12T17:58:21Z', accounts: [] }, async () => {
       const html = await readFile(await build({ vault, outDir: out, now: NOW, sessions: [] }), 'utf8');
-      assert.ok(!html.includes('class="quota"'), 'zero accounts rendered a section');
+      assert.ok(!html.includes('class="quota'), 'zero accounts rendered a section');
     });
   } finally {
     await rm(vault, { recursive: true, force: true });
@@ -304,29 +316,47 @@ test('stale data says so, as a floor claim rather than a freezing counter', asyn
   }
 });
 
-test('a same-day weekly reset shows the time only; a later week stays a bare date', async () => {
-  // Constructed in LOCAL time so the day comparison holds in every timezone:
-  // noon and 21:03 on the same local calendar day, with beta's weekly reset
-  // at local noon on the 18th. (Fixed-Z instants fail this test in timezones
-  // where noon Z and 21:03 Z land on different local days.)
-  const localNoon = new Date(2026, 7, 12, 12, 0, 0);
-  const laterToday = new Date(2026, 7, 12, 21, 3, 0);
+test('a hot number goes amber and an out account dims, in the table', async () => {
   const fix = usageFixture();
-  fix.updated = localNoon.toISOString();
-  fix.accounts[0].sevenDay = { utilization: 18.6, resetsAt: laterToday.toISOString() };
-  fix.accounts[1].sevenDay = { utilization: 97.5, resetsAt: new Date(2026, 7, 18, 12, 0, 0).toISOString() };
+  fix.currentAccountId = 'alpha';
+  fix.accounts[0].fiveHour = { utilization: 93.2, resetsAt: '2026-08-12T19:57:11Z' };
+  fix.accounts[1] = {
+    ...fix.accounts[1],
+    state: 'ok', error: null,
+    fiveHour: { utilization: 40, resetsAt: '2026-08-12T22:02:00Z' },
+    // Floors to 97: under the 98 out line, over the 90 hot line. The row must
+    // not dim and the cell must read amber.
+    sevenDay: { utilization: 97.5, resetsAt: '2026-08-18T07:12:03Z' },
+  };
   const vault = await makeVault();
   const out = await mkdtemp(join(tmpdir(), 'vh-usage-out-'));
   try {
     await withUsageFile(fix, async () => {
-      const html = await readFile(await build({ vault, outDir: out, now: localNoon.getTime(), sessions: [] }), 'utf8');
-      // The reset is later the same local date, so the time IS the answer and
-      // the date is dropped (operator call 2026-08-12).
-      assert.match(html, /7d 18% ↻ \d{2}:\d{2}/, 'a same-day reset did not show its time');
-      assert.ok(!html.includes('↻ Aug 12'), 'a same-day reset kept the date');
-      // Beta's reset is the 18th — not today, so it stays a bare date.
-      assert.ok(html.includes('↻ Aug 18'), 'a later-week reset lost its date');
-      assert.ok(!/Aug 18 \d{2}:\d{2}/.test(html), 'a later-week reset carried a time');
+      const html = await readFile(await build({ vault, outDir: out, now: NOW, sessions: [] }), 'utf8');
+      assert.ok(html.includes('<span class="qn hot">93%</span>'), 'a hot session cell was not amber');
+      assert.ok(html.includes('<span class="qn hot">97%</span>'), 'a hot week cell was not amber');
+      // The full element signature, not the bare class name: the stylesheet's
+      // own selectors contain "is-out" as text.
+      assert.ok(!html.includes('<div class="qrow is-out">'), 'a 97-floored week dimmed the row');
+      assert.ok(!html.includes('✕ OUT'), 'a 97-floored week drew the out mark');
+    });
+  } finally {
+    await rm(vault, { recursive: true, force: true });
+    await rm(out, { recursive: true, force: true });
+  }
+});
+
+test('with no Fable window anywhere the FAB column does not exist', async () => {
+  const noFab = usageFixture();
+  noFab.accounts[0].sevenDayFable = null;
+  const vault = await makeVault();
+  const out = await mkdtemp(join(tmpdir(), 'vh-usage-out-'));
+  try {
+    await withUsageFile(noFab, async () => {
+      const html = await readFile(await build({ vault, outDir: out, now: NOW, sessions: [] }), 'utf8');
+      const quotaBlock = html.slice(html.indexOf('class="quota'), html.indexOf('</section>'));
+      assert.ok(!quotaBlock.includes('>FAB<'), 'an always-on FAB column rendered');
+      assert.ok(!quotaBlock.includes('with-fab'), 'the with-fab class survived an empty window');
     });
   } finally {
     await rm(vault, { recursive: true, force: true });

@@ -511,12 +511,16 @@ export function boardDigest(rawBoard, now = null) {
       s.name, s.since, s.status, s.silentBucket, s.agentsOut, s.agentsTotal, s.agentsCapped,
       s.etaMins, s.etaOver, s.context,
     ]),
-    // Only what the usage section RENDERS. Hashing the whole projection meant
-    // the bucketed `updated` — which advances every 300s poll by construction —
-    // fired a deploy per poll over a byte-identical page (~288/day), and the
-    // never-rendered plan/opus/sonnet fields did the same in miniature (review,
-    // 2026-08-12). Staleness still fires, via the clock term: a dead poller
-    // freezes every field here and only usageStale moves.
+    // Only what the usage section RENDERS, with one deliberate extra class:
+    // the resets. Rows no longer print them (2026-08-13), but the spent
+    // verdict's "frees HH:MM" clock does — a re-anchored reset must fire a
+    // deploy or that clock lies. The cost is a handful of invisible deploys
+    // per account per day as 5h windows roll, against the ~288/day this
+    // digest exists to prevent. Hashing the whole projection previously made
+    // every poll a deploy: the bucketed `updated` advances each 300s tick by
+    // construction, and the never-rendered plan/opus/sonnet fields churned
+    // beside it (review, 2026-08-12). Staleness still fires via the clock
+    // term: a dead poller freezes every field here and only usageStale moves.
     usage: usage ? [
       usage.currentAccountId,
       usageStale(),
@@ -746,28 +750,41 @@ footer{margin-top:30px;font:11px/1.5 var(--mono);color:var(--dim);
     white-space:nowrap;text-align:right}
 .hsub{grid-column:1/-1;font:11px/1.45 var(--mono);color:var(--text-3)}
 
-/* Claude subscription usage. The section answers "which account do I use", so
-   the verdict leads and the per-account rows are the evidence under it, each
-   one line: enrollment id, the two quotas, a chip only when the account is not
-   usable. Sits above the runs because the answer is wanted before the board,
-   not after it. Same panel family as a run card, without the state edge: an
-   account in trouble is marked on its own row, not on the whole section. */
+/* Claude subscription usage. The section answers "which account is usable
+   right now", so the verdict leads and a small quota table supports it — one
+   row per account, the numbers in right-aligned columns under micro-labels. Resets were dropped
+   on 2026-08-13: at phone width they wrapped the id onto two lines and clipped
+   every right-edge figure, and the actionable question here is which account,
+   not when the others return. Same panel family as a run card, without the
+   state edge: an account in trouble is marked on its own row. */
 .quota{border:1px solid var(--rule-hot);background:var(--panel);
        padding:12px 16px;margin:0 0 18px}
 .qrec{font:600 15px/1.4 var(--sans);color:var(--bone);margin:0;overflow-wrap:anywhere}
 .qrec b{color:var(--orange);font-weight:600}
 .qrec .qchip{margin-left:8px;vertical-align:2px}
-.qrow{display:flex;align-items:baseline;gap:10px;padding:5px 0;
-      border-top:1px solid var(--rule)}
-.qrec + .qrow{margin-top:7px}
-.qlab{flex:1 1 auto;min-width:0;font:13px/1.4 var(--sans);color:var(--bone);
-      overflow-wrap:anywhere}
-.qnum{flex:0 0 auto;font:11px/1.4 var(--mono);font-variant-numeric:tabular-nums;
-      letter-spacing:.04em;color:var(--text-3);white-space:nowrap}
-/* The one warm mark in the section: an account that cannot be used, or data
-   too old to act on. Amber, matching the blocked/failed encoding elsewhere. */
-.qchip{flex:0 0 auto;font:9px/1 var(--mono);letter-spacing:.12em;color:var(--amber);
+.qtable{margin-top:8px}
+.qrow{display:grid;grid-template-columns:minmax(0,1fr) 4ch 4ch;gap:0 10px;
+      align-items:center;padding:5px 0;border-top:1px solid var(--rule)}
+.with-fab .qrow{grid-template-columns:minmax(0,1fr) 4ch 4ch 4ch}
+.qrow.qhead{border-top:0;padding:0 0 2px}
+.qhead span{font:9px/1 var(--mono);letter-spacing:.12em;color:var(--dim);
+            text-transform:uppercase;text-align:right}
+.qhead span:first-child{text-align:left}
+.qlab{min-width:0;font:13px/1.4 var(--sans);color:var(--bone);white-space:nowrap;
+      overflow:hidden;text-overflow:ellipsis}
+.qlab .qchip{margin-left:6px;vertical-align:1px}
+.qn{font:11px/1.4 var(--mono);font-variant-numeric:tabular-nums;letter-spacing:.04em;
+    color:var(--text-3);white-space:nowrap;text-align:right}
+.qn.hot{color:var(--amber)}
+.qrow.is-out{opacity:.5}
+.qrow.is-out .qn{color:var(--dim)}
+/* The warm marks in the section: an account that cannot be used, or data too
+   old to act on. Amber, matching the blocked/failed encoding elsewhere. The
+   OUT mark is dim rather than amber: a terminal state, not a warning. */
+.qchip{display:inline-block;font:9px/1 var(--mono);letter-spacing:.12em;color:var(--amber);
        border:1px solid var(--amber);padding:3px 5px;white-space:nowrap}
+.qchip.qout{color:var(--dim);border-color:var(--dimmer)}
+.qchip.qcur{color:var(--bone);border-color:var(--rule-hot)}
 `;
 
 function unitRows(units, now) {
@@ -897,27 +914,11 @@ function ranFor(r) {
  * one, or zero accounts enrolled. An absent section is the normal state of a
  * machine that never enrolled, not an error worth a line on the page.
  *
- * Reset times are clock times, not deltas, and that is deliberate in both
- * directions: a resets-at is a fixed instant from the API (a fact, so the AT
- * claim `clockAt` makes is honest), where the cap projection is an estimate —
- * and an estimate printed as a clock on a page rebuilt only when the digest
- * moves would outlive itself, the finishClock doctrine. The projection buckets
- * every stamp to five minutes, so no clock printed here can claim a precision
- * the deploy cadence cannot keep.
+ * No per-row resets on the phone: at 390px they wrapped and clipped, and the
+ * question here is which account is fine, not when the others return (the
+ * spent verdict still names a freeing time). The desktop strip keeps the
+ * resets; it has the width for them.
  */
-/** A weekly reset reads as a date — but as a bare clock time when that date
- *  is today, where the time is the whole answer. Same fixed-fact footing as
- *  clockAt. */
-const dayMon = (iso, now) => {
-  const t = Date.parse(iso ?? '');
-  if (!Number.isFinite(t)) return '';
-  const d = new Date(t);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  if (d.toDateString() === new Date(now).toDateString()) return `${hh}:${mm}`;
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-};
-
 function usageSection(usage, now) {
   const view = usageView(usage, now);
   if (!view || !view.accounts.length) return '';
@@ -958,31 +959,42 @@ function usageSection(usage, now) {
     verdict = `Best headroom: <b>${esc(v.target.id)}</b> · ${esc(quotas(v.target))}`;
   } else {
     // Every usable account is capped, so the answer becomes when one frees.
-    // nextFree is the earliest 5h reset still in the future; a clock time,
-    // same reasoning as the row resets.
+    // nextFree is the earliest binding reset still in the future; a clock
+    // time, same fixed-fact reasoning as every clock on this page.
     const frees = v.nextFree
       ? ` · ${esc(v.nextFree.id)} frees ${esc(clockAt(v.nextFree.at, now)) || 'soon'}`
       : '';
     verdict = `All accounts spent${frees}`;
   }
+  // The phone shows quotas, not resets: the operator's call (2026-08-13) —
+  // per-row reset times wrapped and clipped at 390px, and the actionable
+  // question here is which account is fine, not when the others return. A
+  // number goes amber past its switch threshold; an out account dims and
+  // carries the mark. FAB appears only when some account reports a Fable
+  // window, since an always-on column of dashes reads as broken readings.
+  const showFab = view.accounts.some((a) => a.fablePct != null);
+  const head = '<div class="qrow qhead"><span>account</span><span>5H</span><span>7D</span>'
+    + (showFab ? '<span>FAB</span>' : '') + '</div>';
   const rows = view.accounts.map((a) => {
-    const reset = a.fiveHourResetsAt ? clockAt(a.fiveHourResetsAt, now) : '';
-    const chip = a.state === 'ok' ? ''
-      : `<span class="qchip"${a.error ? ` title="${esc(a.error)}"` : ''}>${
-          esc(a.state.replace(/_/g, ' ').toUpperCase())}</span>`;
-    const current = view.currentId === a.id && a.id ? '<span class="qchip">CURRENT</span>' : '';
+    const chips = [];
     // Out leads the chips: past 98% on either bucket the account is unusable
     // right now, and that fact outranks where the CLI happens to point.
-    const out = a.out ? '<span class="qchip">✕ OUT</span>' : '';
-    return `<div class="qrow">` +
-      `<span class="qlab">${esc(a.id)}</span>${out}${chip}${current}` +
-      `<span class="qnum">5h ${pct(a.fiveHourPct)}${reset ? ` ↻ ${esc(reset)}` : ''}</span>` +
-      `<span class="qnum">7d ${pct(a.sevenDayPct)}${a.sevenDayResetsAt ? ` ↻ ${esc(dayMon(a.sevenDayResetsAt, now))}` : ''}</span>` +
-      (a.fablePct != null ? `<span class="qnum">fab ${pct(a.fablePct)}${a.fableResetsAt ? ` ↻ ${esc(dayMon(a.fableResetsAt, now))}` : ''}</span>` : '') +
+    if (a.out) chips.push('<span class="qchip qout">✕ OUT</span>');
+    if (a.state !== 'ok') {
+      chips.push(`<span class="qchip"${a.error ? ` title="${esc(a.error)}"` : ''}>${
+        esc(a.state.replace(/_/g, ' ').toUpperCase())}</span>`);
+    }
+    if (view.currentId === a.id && a.id) chips.push('<span class="qchip qcur">CURRENT</span>');
+    const n = (val, hot) => `<span class="qn${hot ? ' hot' : ''}">${pct(val)}</span>`;
+    return `<div class="qrow${a.out ? ' is-out' : ''}">` +
+      `<span class="qlab" title="${esc(a.id)}">${esc(a.id)}${chips.join('')}</span>` +
+      n(a.fiveHourPct, a.fiveHourPct != null && a.fiveHourPct >= SWITCH_SESSION_PCT) +
+      n(a.sevenDayPct, a.sevenDayPct != null && a.sevenDayPct >= SWITCH_WEEK_PCT) +
+      (showFab ? n(a.fablePct, a.fablePct != null && a.fablePct >= SWITCH_WEEK_PCT) : '') +
       `</div>`;
   }).join('');
-  return `<section class="quota" aria-label="Claude subscription usage">` +
-    `<p class="qrec">${verdict}${stale}</p>${rows}</section>`;
+  return `<section class="quota${showFab ? ' with-fab' : ''}" aria-label="Claude subscription usage">` +
+    `<p class="qrec">${verdict}${stale}</p><div class="qtable">${head}${rows}</div></section>`;
 }
 
 /**
