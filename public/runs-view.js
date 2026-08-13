@@ -1259,7 +1259,7 @@ export function askOf(run, now) {
   // `running` is here as well as `blocked` because a run that is working with
   // something blocked says "1 BLOCKED" in its state, and a count with no name is
   // not actionable. Gating this on `blocked` alone silently dropped the line
-  // "Unit R4 blocked: the visual review, shot and waiting on you" at the moment
+  // (shape: "Unit X9 blocked: <its label>, and waiting on you") at the moment
   // runState stopped calling that run blocked.
   if (st !== 'blocked' && st !== 'running') return '';
   // Failed first, then blocked. A run can be BLOCKED by either with no
