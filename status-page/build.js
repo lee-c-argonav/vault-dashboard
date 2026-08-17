@@ -26,7 +26,7 @@ import { usageView, USAGE_STALE_MS, SWITCH_SESSION_PCT, SWITCH_WEEK_PCT } from '
 import {
   LABEL, runState, stateText, durationOf, unitWindow, expandSet, askOf, quietMs,
   elapsedText, humanMs, counts, partitionRuns, linkSessions, batchStamped,
-  STALE_MS,
+  STALE_MS, liveAsks,
   sessionContext, sortRank, blockedNote, FINISHED_MAX_AGE_MS, agentEta, URGENCY, countAsOf,
   attentionModel, attentionCaption, clockAt, goalEta, goalEtaText,
 } from '../public/runs-view.js';
@@ -490,8 +490,15 @@ export function boardDigest(rawBoard, now = null) {
     // age clears the line.
     return now - Date.parse(usage.updated) > USAGE_STALE_MS + 5 * 60_000 ? 1 : 0;
   };
+  // Flips once when a dead run's asks age out at ASK_LIVE_MS, so the phone
+  // stops demanding for them on the next deploy rather than whenever some
+  // unrelated field next moves. Binary, like usageStale: the flip is the only
+  // digest-visible moment, and a run with a live session never flips (its
+  // asks stay live by definition).
+  const askAged = (r) => (now === null ? 0
+    : (r.needsInput?.length ?? 0) > 0 && liveAsks(r, now).length === 0 ? 1 : 0);
   return createHash('sha256').update(JSON.stringify({
-    active: active.map((r) => [run(r), silence(r)]),
+    active: active.map((r) => [run(r), silence(r), askAged(r)]),
     finished: finished.map(run),
     // Rendered in the footer as "N run files unreadable", so a newly corrupt
     // file must be able to reach the page.
@@ -832,7 +839,7 @@ function publicEtaText(s) {
 }
 
 function runCard(r, now, expanded) {
-  const st = runState(r);
+  const st = runState(r, now);
   const ask = askOf(r, now);
   const c = counts(r.units);
   const elapsed = elapsedText(r, now);
@@ -1114,7 +1121,7 @@ export async function build(opts = {}) {
   // hid a blocked run and a stalled session — the page stayed calm about the
   // two situations it exists to surface. Demand is all three kinds: runs
   // asking, runs blocked, sessions claiming to work and writing nothing.
-  const att = attentionModel({ runs: active, sessions: unpublished });
+  const att = attentionModel({ runs: active, sessions: unpublished }, now);
   const demand = att.demandCount;
   const expand = expandSet(active);
 
@@ -1129,7 +1136,7 @@ export async function build(opts = {}) {
     if (!byRepo.has(key)) byRepo.set(key, []);
     byRepo.get(key).push(r);
   }
-  const worst = (list) => Math.min(...list.map((r) => rank[runState(r)]));
+  const worst = (list) => Math.min(...list.map((r) => rank[runState(r, now)]));
   const groups = [...byRepo.entries()]
     .sort((a, b) => worst(a[1]) - worst(b[1]) || a[0].localeCompare(b[0]));
 

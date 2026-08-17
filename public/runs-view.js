@@ -95,11 +95,36 @@ export function isQuiet(run, now) {
   return q === null || q > STALE_MS;
 }
 
+/**
+ * How long a dead run's questions stay live demand. Six hours covers an
+ * answer given overnight without letting a fresh crash go unannounced — the
+ * README's "asked and then died" case keeps its NEEDS YOU while the death is
+ * fresh. (Operator report 2026-08-17: asks settled days earlier still read as
+ * demand, because the run died without clearing them.)
+ */
+export const ASK_LIVE_MS = 6 * 3600_000;
+
+/**
+ * The needsInput entries that are still live demand. With no clock the legacy
+ * answer is all of them; passing `now` ages out asks whose run can no longer
+ * be answered — no live session and quiet past ASK_LIVE_MS. A run carrying a
+ * live session keeps its asks regardless: alive and unanswered is a fact, and
+ * "settled" is the writer's to say by removing the entry.
+ */
+export function liveAsks(run, now = null) {
+  const asks = Array.isArray(run?.needsInput) ? run.needsInput : [];
+  if (!asks.length || now == null) return asks;
+  if (run.session) return asks;
+  const q = quietMs(run, now);
+  if (q === null || q <= ASK_LIVE_MS) return asks;
+  return [];
+}
+
 const isRunning = (u) => u.state === 'running';
 const isBlocked = (u) => u.state === 'blocked';
 const isFailed = (u) => u.state === 'failed';
 
-export function runState(run) {
+export function runState(run, now = null) {
   // Guarded here rather than at one call site. The load gauge (now
   // attentionModel) wrapped this in a try/catch claiming the panel was
   // protected; it protected one
@@ -109,7 +134,9 @@ export function runState(run) {
   if (!run || !Array.isArray(run.units) || !Array.isArray(run.needsInput)
       || !Array.isArray(run.blockers)) return 'running';
   if (run.state === 'done' || run.state === 'paused') return run.state;
-  if (run.needsInput.length) return 'needs-input';
+  // `now` ages a dead run's asks out past ASK_LIVE_MS (see liveAsks). Callers
+  // without a clock get the legacy reading: every ask counts.
+  if (liveAsks(run, now).length) return 'needs-input';
   if (run.blockers.length) return 'blocked';
   // A failure is not something the run works around, so it outranks live work.
   if (run.units.some(isFailed)) return 'blocked';
@@ -349,10 +376,13 @@ const agentsOutOf = (s) => (Array.isArray(s.agents)
 
 /**
  * The census both surfaces render: what is stopped on a human, and what is
- * moving on its own. No clock input, so nothing here can freeze stale between
- * pushes, and the same board always produces the same census.
+ * moving on its own. The clock is OPTIONAL: without it every ask counts (the
+ * legacy reading, which the older tests pin); passing it ages a dead run's
+ * asks out of the demand count at ASK_LIVE_MS. The flip happens once per ask
+ * at its horizon, never per tick, so the census is still stable between
+ * pushes.
  */
-export function attentionModel(state) {
+export function attentionModel(state, now = null) {
   const runs = state?.runs ?? [];
   const sessions = state?.sessions ?? [];
   // Both halves. A session attached to a run is still a live thread.
@@ -366,7 +396,8 @@ export function attentionModel(state) {
 
   const counts = {
     // Items, not runs: one run asking three questions is three things to answer.
-    needsYou: runs.reduce((n, r) => n + (r?.needsInput?.length ?? 0), 0),
+    // With a clock, asks whose run is dead and long quiet stop demanding.
+    needsYou: runs.reduce((n, r) => n + liveAsks(r, now).length, 0),
     // Guarded. `runState` dereferences `needsInput` and `units`, and this
     // renders on every parse including the partial refresh, so a run that is
     // half-shaped for one tick must cost that term and not the whole panel.
@@ -1055,9 +1086,12 @@ export function stateText(run, now, session = null) {
   // alive and not reporting, which is a writer problem, not a dead run. The
   // operator caught this on 2026-08-10 — "it is not really quiet" — about a run
   // whose session had been alive throughout.
-  return session
-    ? `${head} · NO UPDATE ${humanMs(q)}`
-    : `${head} · QUIET ${humanMs(q)}`;
+  if (session) return `${head} · NO UPDATE ${humanMs(q)}`;
+  // A dead run's asks age out of the demand count, but they were never
+  // answered: the row says so as residue, quietly, in the same segment.
+  const aged = (run.needsInput?.length ?? 0) > 0 && liveAsks(run, now).length === 0;
+  const asks = aged ? ` · ${run.needsInput.length} ASK${run.needsInput.length === 1 ? '' : 'S'} UNANSWERED` : '';
+  return `${head} · QUIET ${humanMs(q)}${asks}`;
 }
 
 // Rows only need rebuilding when what they display changes. Runs repaint on
@@ -1069,7 +1103,11 @@ export function rowSignature(run, now) {
     // `run.session` is part of what the row renders now: it decides QUIET versus
     // NO UPDATE. Left out of the signature, a run whose session exits keeps
     // claiming the session is alive until something else changes.
-    runState(run), stateText(run, now, run.session), run.session?.pid ?? '',
+    runState(run, now), stateText(run, now, run.session), run.session?.pid ?? '',
+    // The section header names the branch, so a branch switch must rebuild the
+    // row at once, not wait on some other field to move. Run files carry no
+    // branch of their own; it arrives on the linked session.
+    run.session?.branch ?? '',
     // The context meter's percentage: without it a filling window never
     // repaints the row. The figure itself is the bucket, so the row rebuilds
     // when a point of fill moves and never faster.

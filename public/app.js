@@ -117,7 +117,7 @@ function renderHeader(state) {
   // RUNS, SESSIONS and AGENTS are volume and stay neutral however large they get:
   // eight agents working is not a problem. STALLED and NEEDS YOU go orange the
   // moment they are non-zero, because both mean something has stopped.
-  const att = attentionModel(state);
+  const att = attentionModel(state, Date.now());
   const cells = [
     ['s-runs', (state.runs ?? []).length, false],
     ['s-sessions', att.counts.sessions, false],
@@ -379,7 +379,7 @@ function renderFocus(state) {
   // or one question), while marks are countable at a glance and the colour
   // says which kind. The number beside the strip is the demand count — things
   // stopped on a human — which is the one figure with an action in it.
-  const att = attentionModel(state);
+  const att = attentionModel(state, Date.now());
   const n = $('load-n');
   n.textContent = pad2(att.demandCount);
   n.classList.toggle('hot', att.demandCount > 0);
@@ -499,7 +499,7 @@ function heroFor(state) {
     };
   }
 
-  const blocked = runs.filter((r) => runState(r) === 'blocked');
+  const blocked = runs.filter((r) => runState(r, Date.now()) === 'blocked');
   if (blocked.length) {
     return { label: 'BLOCKED', n: blocked.length, sub: clip(plain(blocked[0].goal ?? ''), 52) };
   }
@@ -671,7 +671,7 @@ function ctxMeter(ctx) {
 }
 
 function runRow(r, now, expanded = true) {
-  const st = runState(r);
+  const st = runState(r, now);
   const nostamp = quietMs(r, now) === null;
   // `is-warn` marks a run that is working with something blocked. Without it
   // the row is indistinguishable from ordinary work and the amber vocabulary
@@ -1092,7 +1092,7 @@ let runsSig = null;
 
 function renderRuns(runs, sessions = []) {
   const now = Date.now();
-  const needing = runs.filter((r) => runState(r) === 'needs-input').length;
+  const needing = runs.filter((r) => runState(r, now) === 'needs-input').length;
   $('p-runs').classList.toggle('hot', needing > 0);
   // Sessions are counted separately from runs. Folding them into one number
   // would say "05 RUNS" when two of the five are publishing nothing, which is
