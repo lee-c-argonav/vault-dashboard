@@ -781,8 +781,10 @@ body {
 
 /* ── runs ───────────────────────────────────────────────────────────────── */
 
-/* Runs group by repo. The header is suppressed when the whole board is one
-   repo, because one header over one group is chrome. */
+/* Runs group by project · branch: two branches of one repo list apart, and two
+   repos sharing a branch name do not merge. The header always renders, even
+   over a single section: it is the only place a row's repo and branch are
+   named. */
 .repo-head {
   display: flex;
   align-items: center;
@@ -790,7 +792,7 @@ body {
   padding: 10px 16px 8px;
   background: var(--bg);
   border-bottom: 1px solid var(--rule);
-  /* Sticky, or a run scrolled past its header cannot be attributed to a repo
+  /* Sticky, or a run scrolled past its header cannot be attributed to a section
      at all. It already paints an opaque --bg, so nothing bleeds through. */
   position: sticky;
   top: 0;
@@ -936,14 +938,6 @@ body {
   padding: 2px 0 2px 81px;
 }
 
-/* The multiplier on a grouped workflow row. Dim: it is a quantity, not a name. */
-.run-a-count {
-  font: 10px/1.45 var(--mono);
-  letter-spacing: .06em;
-  color: var(--text-3);
-  white-space: nowrap;
-}
-
 .run-a-label {
   font: 12px/1.45 var(--sans);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -968,9 +962,6 @@ body {
    row with no agent cluster auto-places it 92px early. */
 .run-u .dur { grid-column: 5; }
 .run-a .dur { grid-column: 3; }
-/* A grouped workflow row has a fourth cell, the multiplier, between the label
-   and the duration. Its own grid rather than a wider one for every row: an
-   ungrouped row has nothing to put there and would carry a dead column. */
 
 /* Observed fan-out, beneath the units and above the footer. Row-scoped because
    nothing on disk maps a sub-agent to a unit; the declared per-unit clusters

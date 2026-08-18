@@ -72,6 +72,18 @@ const HOT_RSS_BYTES = 4 * 1024 ** 3;
  */
 const BUSY_CPU_PCT = 30;
 
+/**
+ * The memory half of the same question. Memory pressure with no single process
+ * over HOT_RSS_BYTES — forty processes at 800MB each — named nobody, the same
+ * hole the CPU fallback above closed. At or above this percent of the whole
+ * machine (the MEM cell's own number) the top memory consumer is named.
+ *
+ * 85 sits just above the cell's amber line (80): the slot lights only once the
+ * cell has already said the machine is in trouble. VAULT_HUD_BUSY_MEM_PCT
+ * overrides it, the same knob VAULT_HUD_METRICS_MS is for the tick.
+ */
+const BUSY_MEM_PCT = Math.max(1, Number(process.env.VAULT_HUD_BUSY_MEM_PCT ?? 85));
+
 const BATTERY_WARM_C = 40;
 
 /** Run a command with no shell, resolving to '' on any failure. */
@@ -174,6 +186,21 @@ const GPU_ACCUM = /"accumulatedGPUTime"\s*=\s*(\d+)/g;
 // live GPU % on top of this, so the floor only has to reject the genuinely idle.
 const GPU_HOT_FLOOR_PCT = 5;
 
+// GPU heat is a demand signal of its own, the same move BUSY_CPU_PCT makes for
+// the process table. 30 sits below this machine's measured ambient GPU — 38-45%
+// from ordinary compositing — so while the GPU is at or above 30 the trigger is
+// effectively continuous sampling, not demand-driven. That is owned, not
+// accidental: the client can show the offender slot whenever the GPU cell reads
+// 35 or more, so attribution has to be fresh whenever the slot can be visible.
+// The cost is one ioreg call per tick, ~25ms measured.
+//
+// What the replaced cadence actually did: riding doProcs (every 3rd tick) never
+// missed a spike outright, because the cumulative accumulatedGPUTime baseline
+// taken before it already holds it in the next delta. It lagged instead — up
+// to ~30s for the next pass, and ~60s when a spike landed late in a sampling
+// interval and diluted below the 5% floor.
+const GPU_BUSY_PCT = 30;
+
 let prevGpuProcs = null; // { table: Map<pid, cumulative GPU ns>, at: bigint }
 
 /**
@@ -217,11 +244,13 @@ async function sampleGpuProcs() {
     const dNs = ns - before;
     if (dNs <= 0) continue;
     const pct = (dNs / elapsedNs) * 100;
-    if (!top || pct > top.pct) top = { pct, name: names.get(pid) };
+    if (!top || pct > top.pct) top = { pct, name: names.get(pid), pid };
   }
 
   if (!top || top.pct < GPU_HOT_FLOOR_PCT) return null;
-  return { name: top.name, gpuPct: clampPct(top.pct) };
+  // The pid rides along so the sampling loop can describe the winner, the same
+  // treatment the CPU offender gets.
+  return { name: top.name, pid: top.pid, gpuPct: clampPct(top.pct) };
 }
 
 // ── Memory ────────────────────────────────────────────────────────────────────
@@ -391,25 +420,20 @@ async function sampleProcesses() {
   } else if (memHot) {
     hot = { name: topMem.name, pid: topMem.pid, kind: 'mem', cpuPct: null, rssBytes: topMem.rssBytes };
   }
-  // WHAT IT IS, not just what it is called. The table above is read with `ps -c`,
-  // which reports the executable name only, so the answer to "what is eating the
-  // machine" was the word `node` — true and useless, since a dozen unrelated
-  // things on this machine are node.
-  //
-  // One targeted `ps` for the offender alone, never for the table: ~4ms, and only
-  // on a tick where something already crossed a threshold, so an idle machine
-  // pays nothing. The full argument list is far too long to render, so what is
-  // kept is the part that distinguishes one node from another.
-  if (hot) hot.detail = await describeProcess(hot.pid ?? topCpu?.pid ?? topMem?.pid);
 
-  // `top` is returned whether or not it crossed HOT_CPU_PCT, because the OTHER
-  // trigger — the machine as a whole being busy — is not knowable here. This
-  // function samples the process table; the machine's CPU comes from tick deltas
-  // in the loop below. The decision is made where both are in hand.
+  // `top` and `topMem` are returned whether or not they crossed their HOT
+  // lines, because the OTHER triggers — the machine as a whole being busy on
+  // CPU or on memory — are not knowable here. This function samples the process
+  // table; the machine's CPU and MEM come from the loop below. The decision,
+  // and the describeProcess call that explains the winner, are made where both
+  // are in hand.
   const top = topCpu
     ? { name: topCpu.name, pid: topCpu.pid, kind: 'cpu', cpuPct: topCpu.cpuPct, rssBytes: topCpu.rssBytes }
     : null;
-  return { hot, top, count: rows.length };
+  const topM = topMem
+    ? { name: topMem.name, pid: topMem.pid, kind: 'mem', cpuPct: null, rssBytes: topMem.rssBytes }
+    : null;
+  return { hot, top, topMem: topM, count: rows.length };
 }
 
 /**
@@ -509,7 +533,19 @@ async function sample() {
     // is one `ps` (~15ms) and only while CPU is already above BUSY_CPU_PCT, so
     // it buys the answer exactly when it is wanted and costs nothing when idle.
     const busy = cpu !== null && cpu >= BUSY_CPU_PCT;
-    const doProcs = forceAll || busy || tick % PROC_EVERY === 0;
+    // GPU heat forces the GPU-proc sample the same way, decoupled from CPU
+    // demand: a pinned GPU on a CPU-calm machine is the same question with the
+    // roles swapped. The reading is the previous tick's — this tick's GPU sample
+    // is still in flight below — so sustained load is noticed one tick after it
+    // appears, and the sampler's baseline + delta passes attribute it one more
+    // tick after that.
+    const gpuBusy = latest.gpu !== null && latest.gpu >= GPU_BUSY_PCT;
+    // Memory pressure forces the process sample the same way. Memory is the
+    // slow resource and moves in seconds, so the previous tick's reading
+    // notices it soon enough.
+    const memBusy = latest.memory !== null && latest.memory.percent >= BUSY_MEM_PCT;
+    const doProcs = forceAll || busy || memBusy || tick % PROC_EVERY === 0;
+    const doGpuProcs = doProcs || gpuBusy;
     const doSlow = forceAll || tick % SLOW_EVERY === 0;
     tick++;
 
@@ -517,10 +553,42 @@ async function sample() {
       sampleGpu(),
       sampleMemory(),
       doProcs ? sampleProcesses() : Promise.resolve(undefined),
-      doProcs ? sampleGpuProcs() : Promise.resolve(undefined),
+      doGpuProcs ? sampleGpuProcs() : Promise.resolve(undefined),
       doSlow ? sampleBattery() : Promise.resolve(undefined),
       doSlow ? sampleThermal() : Promise.resolve(undefined)
     ]);
+
+    // Three ways to earn the slot. A process hot on its own (HOT_CPU_PCT of one
+    // core, or HOT_RSS_BYTES), or the machine busy on a resource at all
+    // (BUSY_CPU_PCT, BUSY_MEM_PCT, whole machine) — in which case the top
+    // process on that resource is named even though nothing is individually
+    // hot, which is the eight-processes-at-20% case the first rule misses. Both
+    // resources busy at once names the one further past its threshold, the same
+    // comparison the hot decision makes above.
+    const fallback = busy && memBusy
+      ? (cpu / BUSY_CPU_PCT >= (latest.memory?.percent ?? 0) / BUSY_MEM_PCT ? procs?.top : procs?.topMem)
+      : (busy ? procs?.top : (memBusy ? procs?.topMem : null));
+    const hot = procs === undefined
+      ? latest.hot
+      : (procs?.hot ?? fallback ?? null);
+    // WHAT IT IS, not just what it is called. The table is read with `ps -c`,
+    // which reports the executable name only, so the answer to "what is eating
+    // the machine" was the word `node` — true and useless, since a dozen
+    // unrelated things on this machine are node. It happens here, next to the
+    // decision, so the busy-fallback `top` is described too, not only a process
+    // hot on its own; a carried-over offender already has its detail from the
+    // tick that chose it.
+    //
+    // One targeted `ps` for the offender alone, never for the table: ~4ms, and
+    // only on a tick where an offender ships, so an idle machine pays nothing.
+    // The full argument list is far too long to render, so what is kept is the
+    // part that distinguishes one node from another.
+    if (procs !== undefined && hot) hot.detail = await describeProcess(hot.pid);
+    // The GPU offender gets the same describe, only on a tick where a fresh one
+    // ships; a carried-over gpuHot keeps the detail from the tick that chose
+    // it. One more targeted `ps` at most per tick, and an offender that exited
+    // before the describe resolves to no detail rather than an error.
+    if (gpuHot !== undefined && gpuHot) gpuHot.detail = await describeProcess(gpuHot.pid);
 
     latest = {
       at: new Date().toISOString(),
@@ -531,13 +599,7 @@ async function sample() {
       memory,
       battery: battery === undefined ? latest.battery : battery,
       thermal: thermal === undefined ? latest.thermal : thermal,
-      // Two ways to earn the slot. A process hot on its own (HOT_CPU_PCT, one
-      // core), or the machine busy at all (BUSY_CPU_PCT, whole machine) — in
-      // which case the top process is named even though nothing is individually
-      // hot, which is the eight-processes-at-20% case the first rule misses.
-      hot: procs === undefined
-        ? latest.hot
-        : (procs?.hot ?? (busy ? (procs?.top ?? null) : null)),
+      hot,
       gpuHot: gpuHot === undefined ? latest.gpuHot : gpuHot,
       warnings: []
     };

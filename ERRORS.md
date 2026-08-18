@@ -242,3 +242,19 @@ desktop HUD in a 500px viewport left over from phone testing.
 the viewport width before trusting any layout number.
 **Remember:** A box is not what a reader sees. Test the glyphs, and check what
 viewport you are actually in before reporting a layout defect.
+
+## 2026-08-12 — Verifying a whole-machine memory threshold live
+**What didn't work:** Driving the machine over the line with allocation hogs. A
+single 8GB hog tripped the per-process runaway guard first (RSS over 4GB names
+the hog whatever the machine is doing), so the whole-machine fallback path never
+ran. Five hogs of 3GB each, filled with random bytes so the compressor could not
+shrink them, peaked the vm_stat-based reading at 83% against an 85% line: under
+real pressure macOS swaps, and swapped-out pages leave the active + wired +
+compressed categories the reading counts. The line could not be reached by force.
+**What did:** An env override on the threshold (`VAULT_HUD_BUSY_MEM_PCT`, the
+same knob `VAULT_HUD_METRICS_MS` is for the tick), set below ambient. The
+identical decision path ran and named a 2.19GB process, which only the fallback
+can produce — a runaway would have had to cross 4GB.
+**Remember:** To verify a threshold on a resource the OS actively manages, lower
+the threshold below ambient. Do not fight the OS for the resource; it will win,
+and the test will have proved nothing.

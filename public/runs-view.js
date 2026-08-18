@@ -1211,6 +1211,46 @@ export function durationOf(x, now, batched = null) {
   return cell('', false, '', x.state);
 }
 
+// The extreme stamp across a group's members, keeping the original string so
+// durationOf can parse it again. Missing and unparseable stamps are skipped,
+// never sorted first: the old code coalesced a missing stamp to '', and ''
+// sorts before every ISO date, which is how one member with no start used to
+// blank the whole group.
+const extremeStamp = (members, key, better) => {
+  let best = null;
+  for (const m of members) {
+    const t = Date.parse(m?.[key]);
+    if (Number.isFinite(t) && (!best || better(t, best.t))) best = { t, iso: m[key] };
+  }
+  return best;
+};
+
+/**
+ * The duration cell for a whole workflow group.
+ *
+ * The span runs from the EARLIEST member's start, members that already returned
+ * included: a batch is finished when its slowest member is, and reading only
+ * the members still visible is what made a finished group count up forever.
+ * The tense is the members' worst. One member still running keeps the group
+ * counting up, and a stalled member beside it does not stop the clock — the
+ * group is only as stuck as its least stuck member. Once nothing is running
+ * the number freezes at the latest movement: an all-stalled group shows that
+ * frozen span, an all-returned group states its measured one. durationOf
+ * renders every branch, so the cell is the same shape as a unit's: same dash,
+ * same `+`, same tooltip.
+ */
+export function groupDuration(members, now) {
+  const start = extremeStamp(members, 'started', (t, b) => t < b);
+  // No member recorded a start: the same cell durationOf gives a unit with no
+  // start, because the answer is identical — we cannot tell you.
+  if (!start) return durationOf({ state: 'running', started: null }, now);
+  if (members.some((m) => m?.state === 'running' || m?.state === 'open')) {
+    return durationOf({ state: 'running', started: start.iso }, now);
+  }
+  const end = extremeStamp(members, 'movedAt', (t, b) => t > b);
+  return durationOf({ state: 'done', started: start.iso, ended: end?.iso }, now);
+}
+
 export const UNIT_WINDOW = 5;
 export const UNIT_TAIL = 2;
 
@@ -1242,9 +1282,34 @@ export const URGENCY = { 'needs-input': 0, blocked: 1, running: 2, paused: 3, do
  */
 const SESSION_RANK = { stalled: 3, running: 5, idle: 7, unknown: 9 };
 
-export function mergedRank(item) {
-  if (item.runId) return (URGENCY[runState(item)] ?? 9) * 2 + (blockedNote(item) ? 0 : 1);
+export function mergedRank(item, now = null) {
+  if (item.runId) return (URGENCY[runState(item, now)] ?? 9) * 2 + (blockedNote(item, now) ? 0 : 1);
   return SESSION_RANK[item.status] ?? 9;
+}
+
+/**
+ * The section a row files under, and what that section is called.
+ *
+ * The key carries project AND branch: keying on the branch alone merged two
+ * repos sharing a branch name into one section, and the header — the only
+ * place a row's repo was named — then lied about half its rows. `\0` separates
+ * the halves so `widget` + `x\0y` can never collide with `widget x` + `y`.
+ *
+ * A session carries `branch` itself; a run carries it on its linked session.
+ * '' is a real reading (the session reported no branch), not a missing one, so
+ * the label falls back to what is known rather than naming a section nothing.
+ */
+export function sectionKeyOf(item) {
+  const project = item.project || item.session?.project || '';
+  const branch = item.branch || item.session?.branch || '';
+  return `${project}\0${branch}`;
+}
+
+export function sectionLabelOf(item) {
+  const project = item.project || item.session?.project || '';
+  const branch = item.branch || item.session?.branch || '';
+  if (project && branch) return `${project} · ${branch}`;
+  return project || branch || '—';
 }
 
 /**
@@ -1252,8 +1317,8 @@ export function mergedRank(item) {
  * needs the operator expands first. Shared, because a surface that expanded a
  * different set would be showing a different board.
  */
-export function expandSet(runs) {
-  const order = [...runs].sort((a, b) => URGENCY[runState(a)] - URGENCY[runState(b)]);
+export function expandSet(runs, now = null) {
+  const order = [...runs].sort((a, b) => URGENCY[runState(a, now)] - URGENCY[runState(b, now)]);
   return new Set(order.slice(0, EXPAND_LIMIT).map((r) => r.runId));
 }
 
@@ -1343,4 +1408,50 @@ export function counts(units) {
 function bucket(iso, now) {
   const t = Date.parse(iso);
   return Number.isFinite(t) ? Math.floor((now - t) / 60_000) : '';
+}
+
+/** Bytes → a two-character-ish figure. Only ever used for process memory. */
+function gib(bytes) {
+  const g = bytes / 1024 ** 3;
+  return g >= 10 ? `${Math.round(g)}G` : `${g.toFixed(1)}G`;
+}
+
+/**
+ * The one-line answer to "what is eating this machine".
+ *
+ * The string is the one app.js always built — `▸ name  pct`, process memory in
+ * gib()'s two-figure format — plus the server's `detail` (what the process is)
+ * when a frame carries one. The detail rode every metrics frame unrendered,
+ * which left `▸ node  214%` answering the question with another question.
+ */
+export function hotOffenderText(hot) {
+  if (!hot) return '';
+  const base = `▸ ${hot.name}  ${hot.kind === 'cpu' ? `${hot.cpuPct}%` : gib(hot.rssBytes)}`;
+  return hot.detail ? `${base} · ${hot.detail}` : base;
+}
+
+/**
+ * The GPU offender's line, mirroring hotOffenderText: `▸ name  pct%`, plus the
+ * server's `detail` when the frame carries one. The GPU slot must not read as
+ * a different kind of statement from the CPU/mem slot beside it.
+ */
+export function gpuOffenderText(gh) {
+  if (!gh) return '';
+  const base = `▸ ${gh.name}  ${gh.gpuPct}%`;
+  return gh.detail ? `${base} · ${gh.detail}` : base;
+}
+
+/**
+ * How busy the GPU must be before the offender slot names an app.
+ *
+ * Was the amber line (80), which hid the name behind exactly the readings that
+ * prompt the question: a GPU at 40% is being driven by something. 35 sits just
+ * above the floor at which the machine counts as busy and the CPU offender
+ * already shows, and still keeps an idling WindowServer from lighting the slot.
+ */
+export const GPU_HOT_SHOW = 35;
+
+/** Whether this metrics frame gets its GPU offender named. */
+export function gpuOffenderShown(m) {
+  return Boolean(m.gpuHot && m.gpu != null && m.gpu >= GPU_HOT_SHOW);
 }

@@ -14,7 +14,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   clockAt, finishClock, goalEta, goalEtaText, fanoutGantt, sessionActivity,
-  askOf, rowSignature, agentEta,
+  askOf, rowSignature, agentEta, groupDuration,
 } from '../public/runs-view.js';
 
 const min = (n) => n * 60_000;
@@ -31,10 +31,11 @@ const run = (over = {}) => ({
 });
 const done = (id, a, b) => ({ id, label: id, state: 'done', started: iso(a), ended: iso(b), agents: [] });
 const todo = (id) => ({ id, label: id, state: 'todo', started: null, ended: null, agents: [] });
-const agent = (id, state, startedMin, movedMin = null) => ({
+const agent = (id, state, startedMin, movedMin = null, over = {}) => ({
   id, label: id, agentType: 'x', depth: 1, parent: '', workflow: '',
   state, started: iso(NOW - min(startedMin)),
   movedAt: movedMin === null ? iso(NOW) : iso(NOW - min(movedMin)),
+  ...over,
 });
 
 // ── AT: a clock face, never a duration ───────────────────────────────────────
@@ -331,4 +332,71 @@ test('a finished run does not apologise for its age', async () => {
   const now = Date.parse('2026-08-11T23:38:00Z');
   // A done run's count is final. "as of 3 days ago" would be true and useless.
   assert.equal(countAsOf({ state: 'done', wrote: '2026-08-08T10:00:00Z' }, now), '');
+});
+
+// ── a workflow group states one span for all its members ─────────────────────
+
+test('an all-returned group states its measured span, not a clock still counting', () => {
+  // Earliest start to last return: 60m ago to 10m ago. The group branch used to
+  // hardcode the running tense, so this read "+50m" and climbed forever.
+  const d = groupDuration([agent('a', 'done', 60, 30), agent('b', 'done', 45, 10)], NOW);
+  assert.equal(d.text, '50m');
+  assert.equal(d.bad, false);
+  assert.match(d.cls, /is-done/);
+});
+
+test('a mixed group counts up from the earliest start, returned members included', () => {
+  // The returned member started longest ago. Reading only the members still out
+  // would say +20m; the batch is as old as its oldest member.
+  const d = groupDuration([agent('a', 'done', 45, 30), agent('b', 'running', 20)], NOW);
+  assert.equal(d.text, '+45m');
+  assert.match(d.cls, /is-running/);
+});
+
+test('a member with no start is skipped, not sorted first', () => {
+  // The old code coalesced a missing stamp to '', and '' sorts before every
+  // ISO date, which is how one member that never stamped a start used to
+  // blank the whole group's figure.
+  const d = groupDuration([
+    agent('a', 'running', 10, null, { started: null }),
+    agent('b', 'running', 30),
+  ], NOW);
+  assert.equal(d.text, '+30m');
+});
+
+test('a group with no parseable start says so the way a unit does', () => {
+  const d = groupDuration([
+    agent('a', 'running', 10, null, { started: null }),
+    agent('b', 'running', 20, null, { started: null }),
+  ], NOW);
+  assert.equal(d.text, '—');
+  assert.equal(d.bad, true);
+  assert.match(d.cls, /is-running/);
+});
+
+test('a stalled group stops at its last movement instead of counting up', () => {
+  // Earliest start 50m ago, most recent movement 15m ago.
+  const d = groupDuration([agent('a', 'stalled', 50, 45), agent('b', 'stalled', 40, 15)], NOW);
+  assert.equal(d.text, '35m');
+  assert.equal(d.bad, false);
+  assert.ok(!d.text.startsWith('+'), 'a group nothing is moving in must not claim to grow');
+});
+
+test('a group with no movement stamp has no span to state', () => {
+  const d = groupDuration([agent('a', 'stalled', 50, 45, { movedAt: null })], NOW);
+  assert.equal(d.text, '—');
+  assert.equal(d.bad, true);
+});
+
+test('a group of one reads like its member', () => {
+  assert.equal(groupDuration([agent('a', 'running', 12)], NOW).text, '+12m');
+  assert.equal(groupDuration([agent('a', 'done', 60, 20)], NOW).text, '40m');
+});
+
+test('an open member forces the running tense', () => {
+  // `open` is an agent that has not stamped a movement yet; it is live work,
+  // so the group's clock keeps counting from the earliest start.
+  const d = groupDuration([agent('a', 'done', 45, 20), agent('b', 'open', 30)], NOW);
+  assert.equal(d.text, '+45m');
+  assert.match(d.cls, /is-running/);
 });

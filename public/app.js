@@ -6,7 +6,7 @@
 // Both import it so the two surfaces cannot disagree about whether a run is
 // waiting on you. Liveness lives here, not in State: State is diffed by
 // stringify below, so a clock-derived field would look changed on every push.
-import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText, sessionActivity, mergedRank, attentionModel, attentionCaption, agentEta, contextBreakdown, clockAt, finishClock, goalEta, goalEtaText, fanoutGantt, contextOf, countAsOf, liveAsks }
+import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText, sessionActivity, mergedRank, attentionModel, attentionCaption, agentEta, contextBreakdown, clockAt, finishClock, goalEta, goalEtaText, fanoutGantt, contextOf, countAsOf, groupDuration, sectionKeyOf, sectionLabelOf, gpuOffenderShown, gpuOffenderText, hotOffenderText, liveAsks }
   from './runs-view.js';
 
 // The usage strip's whole derivation, shared with the phone build so the two
@@ -1029,28 +1029,40 @@ function agentList(agents, capped, now) {
   // their sidecar carries no description, so fourteen of them rendered fourteen
   // identical rows reading `audio-route-and-oss`, which is a list that says one
   // thing fourteen times. One row per workflow says more in a fourteenth of the
-  // space: how many are running, and how long the oldest has been at it.
+  // space: the full count, the worst state, and the first-start-to-last-end span.
+  //
+  // Membership is the FULL agents array, so a group's count, state and duration
+  // describe the whole workflow even when `shown` is capped or holds only the
+  // members still out. `shown` still decides which rows are drawn, and in what
+  // order — a workflow with no member in view gets no row.
   //
   // Directly dispatched agents are NOT grouped. Each carries its own written
   // description, so each row is a different fact.
-  const groups = [];
   const byWorkflow = new Map();
-  for (const a of shown) {
-    if (!a.workflow) { groups.push({ one: a }); continue; }
+  for (const a of agents) {
+    if (!a.workflow) continue;
     if (!byWorkflow.has(a.workflow)) {
-      const g = { workflow: a.workflow, label: a.label, members: [] };
-      byWorkflow.set(a.workflow, g);
-      groups.push(g);
+      byWorkflow.set(a.workflow, { workflow: a.workflow, label: a.label, members: [] });
     }
     byWorkflow.get(a.workflow).members.push(a);
+  }
+  const groups = [];
+  const drawn = new Set();
+  for (const a of shown) {
+    if (!a.workflow) { groups.push({ one: a }); continue; }
+    if (drawn.has(a.workflow)) continue;
+    drawn.add(a.workflow);
+    groups.push(byWorkflow.get(a.workflow));
   }
 
   for (const g of groups) {
     if (!g.one && g.members.length > 1) {
-      // The group's own state is its worst: one stalled member is the fact worth
-      // surfacing, and a row that reads `running` while a member is stuck hides
-      // exactly what the operator is scanning for.
-      const state = g.members.some((m) => m.state === 'stalled') ? 'stalled' : 'running';
+      // The group's own state, over the full membership: done when every member
+      // is done, else stalled when any one is — one stalled member is the fact
+      // worth surfacing, and a row that reads `running` while a member is stuck
+      // hides exactly what the operator is scanning for — else running.
+      const state = g.members.every((m) => m.state === 'done') ? 'done'
+        : g.members.some((m) => m.state === 'stalled') ? 'stalled' : 'running';
       // THREE columns, the same as every other row. A fourth cell for the count
       // needed its own grid, and that grid did not resolve as written — the
       // count's column came out 82px against ~110px of text and spilled into the
@@ -1064,13 +1076,16 @@ function agentList(agents, capped, now) {
       label.title = `${g.members.length} agents in this workflow`
         + (stalled ? `, ${stalled} of them stalled` : '');
       row.append(label);
-      // The OLDEST member's elapsed, because a batch is finished when its
-      // slowest member is, and that is the number the operator is waiting on.
-      const oldest = g.members.reduce((a, b) =>
-        (String(a.started ?? '') <= String(b.started ?? '') ? a : b));
-      const d = durationOf({ state: 'running', started: oldest.started }, now, null);
+      // The workflow's span, not one member's clock: earliest member start to
+      // latest member end. One member still running keeps it counting up — a
+      // stalled one beside it does not stop the clock — and once nothing is
+      // running the span freezes at the latest movement. Members with no
+      // stamps are skipped rather than blanking the group.
+      const d = groupDuration(g.members, now);
       const t = el('span', d.cls, d.text);
-      t.title = 'The longest-running agent in this workflow';
+      // An anomaly cell explains itself; a measurement states what it spans.
+      t.title = d.why || 'Earliest member start to latest member end. '
+        + 'Stops growing once every member has returned or stalled.';
       row.append(t);
       wrap.append(row);
       continue;
@@ -1081,10 +1096,10 @@ function agentList(agents, capped, now) {
     const label = el('span', 'run-a-label', a.label || a.agentType || a.id);
     label.title = `${a.label || a.id}${a.depth > 1 ? ` · nested, depth ${a.depth}` : ''}`;
     sub.append(label);
-    // A returned agent gets its measured span, not a clock still counting up.
-    const d = a.state === 'done'
-      ? durationOf({ state: 'done', started: a.started, ended: a.movedAt }, now, null)
-      : durationOf({ state: 'running', started: a.started }, now, null);
+    // One agent is a group of one: a returned agent states its measured span,
+    // and a stalled one freezes at its last movement instead of counting up —
+    // the same reading a workflow row gives.
+    const d = groupDuration([a], now);
     const t = el('span', d.cls, d.text);
     if (a.state === 'stalled') t.title = 'Open, but its transcript has not moved in over ten minutes';
     sub.append(t);
@@ -1150,7 +1165,7 @@ function renderRuns(runs, sessions = []) {
   flashIfChanged($('p-runs'), [runs, sessions]);
 }
 
-// Rank a repo by the worst thing inside it, so the group holding the run that
+// Rank a section by the worst thing inside it, so the group holding the run that
 // needs the operator sorts first. Grouping otherwise buries the urgent row at an
 // unpredictable depth, which is the one thing this panel cannot afford.
 
@@ -1164,49 +1179,54 @@ function renderRuns(runs, sessions = []) {
  * plan on top of one.
  *
  * Sessions carry a `project`, so they group with the runs in the same repo
- * rather than being stacked underneath everything.
+ * rather than being stacked underneath everything. The section key is project
+ * AND branch (sectionKeyOf): two branches of one repo list apart, and two
+ * repos that happen to share a branch name do not merge into one section.
  */
 function groupedRows(runs, sessions, now) {
-  const expand = expandSet(runs);
-  const byRepo = new Map();
+  const expand = expandSet(runs, now);
+  const bySection = new Map();
   const put = (key, item) => {
-    const k = key || '—';
-    if (!byRepo.has(k)) byRepo.set(k, []);
-    byRepo.get(k).push(item);
+    // The header is the only place a row's repo and branch are named, so the
+    // label is kept from the first item filed under each key.
+    if (!bySection.has(key)) bySection.set(key, { label: sectionLabelOf(item), items: [] });
+    bySection.get(key).items.push(item);
   };
-  for (const r of runs) put(r.project, r);
-  for (const s of sessions) put(s.project, s);
+  // Sections key on project · branch: two sessions in one repo on different
+  // branches are different work, and the header is the only place a row's
+  // branch is named.
+  for (const r of runs) put(sectionKeyOf(r), r);
+  for (const s of sessions) put(sectionKeyOf(s), s);
 
-  // Rank a repo by the worst thing inside it, so the group holding the row that
-  // needs the operator sorts first. Grouping otherwise buries the urgent row at
-  // an unpredictable depth, which is the one thing this panel cannot afford.
-  const worst = (list) => Math.min(...list.map(mergedRank));
-  const groups = [...byRepo.entries()].sort(
-    (a, b) => worst(a[1]) - worst(b[1]) || a[0].localeCompare(b[0]),
+  // Rank a section by the worst thing inside it, so the group holding the row
+  // that needs the operator sorts first. Grouping otherwise buries the urgent
+  // row at an unpredictable depth, which is the one thing this panel cannot
+  // afford.
+  const worst = (list) => Math.min(...list.map((r) => mergedRank(r, now)));
+  const groups = [...bySection.entries()].sort(
+    (a, b) => worst(a[1].items) - worst(b[1].items) || a[1].label.localeCompare(b[1].label),
   );
 
   const rows = [];
-  for (const [repo, list] of groups) {
-    // One header over one group is chrome, so it only appears when grouping is
-    // doing work.
-    if (groups.length > 1) {
-      const head = el('div', 'repo-head');
-      head.append(el('span', 'repo-name', repo));
-      head.append(el('span', 'rule-fill'));
-      const needing = list.filter((r) => r.runId && runState(r) === 'needs-input').length;
-      const quiet = list.filter((r) => !r.runId).length;
-      head.append(el('span', 'repo-tally',
-        `${pad2(list.length)} ${list.length === 1 ? 'ROW' : 'ROWS'}` +
-        // Same word as the panel counter, for the same reason: this counts
-        // sessions with no run file, not silence.
-        (quiet ? ` · ${pad2(quiet)} NO RUN FILE` : '') +
-        (needing ? ` · ${pad2(needing)} NEEDS YOU` : '')));
-      rows.push(head);
-    }
+  for (const [, { label, items: list }] of groups) {
+    // The header always renders, even over a single section: it is the only
+    // place a row's repo and branch are named.
+    const head = el('div', 'repo-head');
+    head.append(el('span', 'repo-name', label));
+    head.append(el('span', 'rule-fill'));
+    const needing = list.filter((r) => r.runId && runState(r, now) === 'needs-input').length;
+    const quiet = list.filter((r) => !r.runId).length;
+    head.append(el('span', 'repo-tally',
+      `${pad2(list.length)} ${list.length === 1 ? 'ROW' : 'ROWS'}` +
+      // Same word as the panel counter, for the same reason: this counts
+      // sessions with no run file, not silence.
+      (quiet ? ` · ${pad2(quiet)} NO RUN FILE` : '') +
+      (needing ? ` · ${pad2(needing)} NEEDS YOU` : '')));
+    rows.push(head);
     // One comparator over both kinds. Sorting each kind separately and
     // concatenating would put a merrily running run above a stalled session,
     // and one of those two may be dead.
-    for (const item of list.sort((a, b) => mergedRank(a) - mergedRank(b)
+    for (const item of list.sort((a, b) => mergedRank(a, now) - mergedRank(b, now)
       || String(a.runId || a.name || '').localeCompare(String(b.runId || b.name || '')))) {
       rows.push(item.runId ? runRow(item, now, expand.has(item.runId)) : sessionRow(item, now));
     }
@@ -1857,12 +1877,6 @@ const BAT_CRIT = 10;
 
 const pct = (n) => (n == null ? null : `${Math.round(n)}%`);
 
-/** Bytes → a two-character-ish figure. Only ever used for process memory. */
-function gib(bytes) {
-  const g = bytes / 1024 ** 3;
-  return g >= 10 ? `${Math.round(g)}G` : `${g.toFixed(1)}G`;
-}
-
 /**
  * Paint one reading. `value` is the number driving both the text and the bar;
  * passing null hides the whole cell, which is how an unavailable GPU or a
@@ -1921,24 +1935,25 @@ function renderVitals(m) {
   flag.hidden = !warning;
   flag.textContent = warning ?? '';
 
+  // The offender's detail (what the process actually is) rides the same frame;
+  // the shared formatter appends it when the server provided one.
   const hot = m.hot;
-  $('v-hot').textContent = hot
-    ? `▸ ${hot.name}  ${hot.kind === 'cpu' ? `${hot.cpuPct}%` : gib(hot.rssBytes)}`
-    : '';
+  $('v-hot').textContent = hot ? hotOffenderText(hot) : '';
 
   // GPU offender. The server always reports the top GPU process when one clears
   // its floor, but naming it whenever the GPU is merely awake (WindowServer sits
   // there forever) would be the always-lit slot the CPU offender deliberately
-  // avoids. So it surfaces only once the GPU cell is itself high — the same line
-  // at which that cell turns amber — and answers the question that reading raises:
-  // which app. The dim GPU key keeps it distinct from the CPU/mem offender, which
-  // can name the very same app for a different reason.
+  // avoids. So it surfaces once the machine's GPU reading clears the 35% floor
+  // gpuOffenderShown applies — a line well below the cell's amber, because heat
+  // that is GPU-driven at 30–50% otherwise names no culprit — and answers the
+  // question that reading raises: which app. The dim GPU key keeps it distinct
+  // from the CPU/mem offender, which can name the very same app for a different
+  // reason.
   const gpuHotSlot = $('v-gpu-hot');
-  const gh = m.gpuHot;
-  if (gh && m.gpu != null && m.gpu >= VIT_WARN) {
+  if (gpuOffenderShown(m)) {
     gpuHotSlot.replaceChildren(
       el('span', 'vit-hot-k', 'GPU'),
-      document.createTextNode(`▸ ${gh.name}  ${gh.gpuPct}%`)
+      document.createTextNode(gpuOffenderText(m.gpuHot))
     );
   } else {
     gpuHotSlot.replaceChildren();

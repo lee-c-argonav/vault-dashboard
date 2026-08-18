@@ -1125,7 +1125,9 @@ export async function build(opts = {}) {
   const demand = att.demandCount;
   const expand = expandSet(active, now);
 
-  // Group by repo, worst urgency first, exactly as the HUD does.
+  // Group by repo, worst urgency first. The HUD groups by project · branch;
+  // the phone keeps the coarser repo grouping deliberately — one grouping rule
+  // here stays readable on a small screen, and the branch never renders.
   // URGENCY, imported. This was a hand-copy of it, which is the exact drift
   // ERRORS.md's 2026-08-06 entry warns about and the reason runs-view.js exists:
   // two readers that reimplement a rule eventually disagree about it.
