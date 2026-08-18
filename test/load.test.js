@@ -168,14 +168,15 @@ test('every demand term is self-describing', () => {
 
 test('the census carries no scalar and no clock', () => {
   // The scalar is what was removed; a future term must arrive as a count with
-  // a kind, not as arithmetic against a denominator nobody measured. And with
-  // no time input, the same board always renders the same census — nothing
-  // here can freeze stale between pushes.
+  // a kind, not as arithmetic against a denominator nobody measured. The clock
+  // became OPTIONAL on 2026-08-17 (ask aging): one argument is the legacy
+  // reading, and the flip a clock buys happens once per ask at its horizon,
+  // never per tick, so the census is still stable between pushes.
   const m = attentionModel({ runs: [run()], sessions: [session()] });
   for (const dead of ['score', 'pct', 'capacity', 'over']) {
     assert.ok(!(dead in m), `${dead} crept back into the model`);
   }
-  assert.equal(attentionModel.length, 1, 'the model takes state and nothing else');
+  assert.equal(attentionModel.length, 1, 'the model takes state, with the clock optional');
 });
 
 test('a malformed board does not throw', () => {

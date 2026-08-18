@@ -96,27 +96,42 @@ export function isQuiet(run, now) {
 }
 
 /**
- * How long a dead run's questions stay live demand. Six hours covers an
- * answer given overnight without letting a fresh crash go unannounced — the
- * README's "asked and then died" case keeps its NEEDS YOU while the death is
- * fresh. (Operator report 2026-08-17: asks settled days earlier still read as
- * demand, because the run died without clearing them.)
+ * How long a run's questions stay live demand once its file goes quiet. Six
+ * hours covers an answer given overnight without letting a fresh crash go
+ * unannounced — the README's "asked and then died" case keeps its NEEDS YOU
+ * while the death is fresh. (Operator report 2026-08-17: asks settled days
+ * earlier still read as demand, because the run never cleared them.)
  */
 export const ASK_LIVE_MS = 6 * 3600_000;
 
 /**
  * The needsInput entries that are still live demand. With no clock the legacy
- * answer is all of them; passing `now` ages out asks whose run can no longer
- * be answered — no live session and quiet past ASK_LIVE_MS. A run carrying a
- * live session keeps its asks regardless: alive and unanswered is a fact, and
- * "settled" is the writer's to say by removing the entry.
+ * answer is all of them; passing `now` ages out asks whose file has been
+ * quiet past ASK_LIVE_MS. The file, not the process: a live session that is
+ * still writing keeps its quiet time low anyway, and an inert one is
+ * indistinguishable from dead for this purpose — measured on a zombie session
+ * four days past its asks, pid alive, file untouched (2026-08-17). "Settled"
+ * is the writer's to say by removing the entry; the file moving past the ask
+ * is the only signal a reader gets.
  */
 export function liveAsks(run, now = null) {
   const asks = Array.isArray(run?.needsInput) ? run.needsInput : [];
   if (!asks.length || now == null) return asks;
-  if (run.session) return asks;
   const q = quietMs(run, now);
   if (q === null || q <= ASK_LIVE_MS) return asks;
+  return [];
+}
+
+/**
+ * Blockers age on the same rule as asks (liveAsks). Both are demand addressed
+ * to the operator, and a run four days quiet is not blocked so much as
+ * stopped — the blocker text is residue in the file, not a live claim.
+ */
+export function liveBlockers(run, now = null) {
+  const blocks = Array.isArray(run?.blockers) ? run.blockers : [];
+  if (!blocks.length || now == null) return blocks;
+  const q = quietMs(run, now);
+  if (q === null || q <= ASK_LIVE_MS) return blocks;
   return [];
 }
 
@@ -137,7 +152,7 @@ export function runState(run, now = null) {
   // `now` ages a dead run's asks out past ASK_LIVE_MS (see liveAsks). Callers
   // without a clock get the legacy reading: every ask counts.
   if (liveAsks(run, now).length) return 'needs-input';
-  if (run.blockers.length) return 'blocked';
+  if (liveBlockers(run, now).length) return 'blocked';
   // A failure is not something the run works around, so it outranks live work.
   if (run.units.some(isFailed)) return 'blocked';
   // A blocked unit only makes the RUN blocked when nothing is still moving.
@@ -160,8 +175,8 @@ export function runState(run, now = null) {
  * Empty whenever the state already carries it, so the row never says blocked
  * twice.
  */
-export function blockedNote(run) {
-  if (runState(run) !== 'running') return '';
+export function blockedNote(run, now = null) {
+  if (runState(run, now) !== 'running') return '';
   const n = run.units.filter(isBlocked).length;
   return n ? `${n} BLOCKED` : '';
 }
@@ -174,8 +189,8 @@ export function blockedNote(run) {
  * would look at it. URGENCY stays the coarse state ranking that both surfaces
  * group by; this is the tiebreak inside it.
  */
-export function sortRank(run) {
-  return (URGENCY[runState(run)] ?? 9) * 2 + (blockedNote(run) ? 0 : 1);
+export function sortRank(run, now = null) {
+  return (URGENCY[runState(run, now)] ?? 9) * 2 + (blockedNote(run, now) ? 0 : 1);
 }
 
 /**
@@ -402,7 +417,7 @@ export function attentionModel(state, now = null) {
     // renders on every parse including the partial refresh, so a run that is
     // half-shaped for one tick must cost that term and not the whole panel.
     blocked: runs.filter((r) => {
-      try { return runState(r) === 'blocked'; } catch { return false; }
+      try { return runState(r, now) === 'blocked'; } catch { return false; }
     }).length,
     stalled: busy.filter((s) => s.status === 'stalled').length,
     sessions: live.filter((s) => s?.status === 'running').length,
@@ -463,7 +478,7 @@ export function attentionCaption(m) {
  * Ordered by demand first, then by weight of work, so the row that wants you is
  * the row at the top rather than the row that happens to sort first.
  */
-export function contextBreakdown(state) {
+export function contextBreakdown(state, now = null) {
   const runs = state.runs ?? [];
   const sessions = state.sessions ?? [];
   const live = [...sessions, ...runs.map((r) => r?.session).filter(Boolean)];
@@ -487,9 +502,9 @@ export function contextBreakdown(state) {
   }
   for (const run of runs) {
     const r = row(run?.project);
-    r.needsYou += run?.needsInput?.length ?? 0;
+    r.needsYou += liveAsks(run, now).length;
     try {
-      if (runState(run) === 'blocked') r.blocked += 1;
+      if (runState(run, now) === 'blocked') r.blocked += 1;
     } catch { /* a half-shaped run costs this term, not the panel */ }
   }
 
@@ -1059,8 +1074,8 @@ function allUnitsDone(run) {
 }
 
 export function stateText(run, now, session = null) {
-  const label = LABEL[runState(run)] || runState(run);
-  const blocked = blockedNote(run);
+  const label = LABEL[runState(run, now)] || runState(run, now);
+  const blocked = blockedNote(run, now);
   let head = blocked ? `${label} · ${blocked}` : label;
   if (allUnitsDone(run)) head = `${head} · ALL UNITS DONE`;
   // A stamp that trails its own file is named, because every duration on the row
@@ -1086,12 +1101,17 @@ export function stateText(run, now, session = null) {
   // alive and not reporting, which is a writer problem, not a dead run. The
   // operator caught this on 2026-08-10 — "it is not really quiet" — about a run
   // whose session had been alive throughout.
-  if (session) return `${head} · NO UPDATE ${humanMs(q)}`;
-  // A dead run's asks age out of the demand count, but they were never
-  // answered: the row says so as residue, quietly, in the same segment.
-  const aged = (run.needsInput?.length ?? 0) > 0 && liveAsks(run, now).length === 0;
-  const asks = aged ? ` · ${run.needsInput.length} ASK${run.needsInput.length === 1 ? '' : 'S'} UNANSWERED` : '';
-  return `${head} · QUIET ${humanMs(q)}${asks}`;
+  // Demand that aged out of the counts was never settled: the row keeps it as
+  // residue, quietly, in the same segment, on either quiet branch.
+  const agedAsks = (run.needsInput?.length ?? 0) > 0 && liveAsks(run, now).length === 0;
+  const agedBlocks = (run.blockers?.length ?? 0) > 0 && liveBlockers(run, now).length === 0;
+  const residue = [
+    agedAsks ? `${run.needsInput.length} ASK${run.needsInput.length === 1 ? '' : 'S'} UNANSWERED` : '',
+    agedBlocks ? `${run.blockers.length} BLOCKER${run.blockers.length === 1 ? '' : 'S'} QUIET` : '',
+  ].filter(Boolean).join(' · ');
+  const tail = residue ? ` · ${residue}` : '';
+  if (session) return `${head} · NO UPDATE ${humanMs(q)}${tail}`;
+  return `${head} · QUIET ${humanMs(q)}${tail}`;
 }
 
 // Rows only need rebuilding when what they display changes. Runs repaint on
@@ -1280,9 +1300,12 @@ export function unitWindow(units) {
  * synthesised a different reason would be describing a different run.
  */
 export function askOf(run, now) {
-  const st = runState(run);
-  const source = st === 'needs-input' ? run.needsInput[0]
-    : st === 'blocked' ? run.blockers[0] : null;
+  const st = runState(run, now);
+  // The blocked branch reads the blockers array only while it is live: a run
+  // can read 'blocked' on a failed unit long after its blockers list aged
+  // into residue, and naming that residue as the live reason would be a lie.
+  const source = st === 'needs-input' ? liveAsks(run, now)[0]
+    : st === 'blocked' ? liveBlockers(run, now)[0] ?? null : null;
   if (source) {
     const text = source.question ?? source.what;
     const ms = source.since ? now - Date.parse(source.since) : null;

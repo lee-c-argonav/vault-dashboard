@@ -6,7 +6,7 @@
 // Both import it so the two surfaces cannot disagree about whether a run is
 // waiting on you. Liveness lives here, not in State: State is diffed by
 // stringify below, so a clock-derived field would look changed on every push.
-import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText, sessionActivity, mergedRank, attentionModel, attentionCaption, agentEta, contextBreakdown, clockAt, finishClock, goalEta, goalEtaText, fanoutGantt, contextOf, countAsOf }
+import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText, sessionActivity, mergedRank, attentionModel, attentionCaption, agentEta, contextBreakdown, clockAt, finishClock, goalEta, goalEtaText, fanoutGantt, contextOf, countAsOf, liveAsks }
   from './runs-view.js';
 
 // The usage strip's whole derivation, shared with the phone build so the two
@@ -419,7 +419,7 @@ function renderFocus(state) {
   // Capped. The panel is a fixed height in the grid, so an uncapped list is a
   // list that overlaps the focus line the moment a fourth repo appears.
   const LOAD_CTX_MAX = 4;
-  const all = contextBreakdown(state);
+  const all = contextBreakdown(state, Date.now());
   const ctx = all.slice(0, LOAD_CTX_MAX);
   const most = Math.max(1, ...ctx.map((c) => c.sessions + c.agents));
   $('load-ctx').replaceChildren(...ctx.map((c) => {
@@ -480,8 +480,13 @@ function heroFor(state) {
   const runs = state.runs ?? [];
   const live = [...(state.sessions ?? []), ...runs.map((r) => r.session).filter(Boolean)];
   const OUT = new Set(['running', 'stalled', 'open']);
+  const now = Date.now();
 
-  const asks = runs.flatMap((r) => (r.needsInput ?? []).map((q) => ({ q, r })));
+  // liveAsks, not raw needsInput: an ask whose run went quiet past the
+  // six-hour horizon is residue, and the hero is the loudest slot on the
+  // board — it must not demand what the census has already stopped counting
+  // (review, 2026-08-17).
+  const asks = runs.flatMap((r) => liveAsks(r, now).map((q) => ({ q, r })));
   if (asks.length) {
     return {
       label: 'NEEDS YOU',
@@ -676,7 +681,7 @@ function runRow(r, now, expanded = true) {
   // `is-warn` marks a run that is working with something blocked. Without it
   // the row is indistinguishable from ordinary work and the amber vocabulary
   // used everywhere else for a block would not apply to it.
-  const row = el('div', `run is-${st}${blockedNote(r) ? ' is-warn' : ''}${nostamp ? ' is-nostamp' : ''}`);
+  const row = el('div', `run is-${st}${blockedNote(r, now) ? ' is-warn' : ''}${nostamp ? ' is-nostamp' : ''}`);
 
   const top = el('div', 'run-top');
   // A run gets a mark too, and a LARGER one than a session's. A run outranks a

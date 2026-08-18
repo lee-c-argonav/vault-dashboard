@@ -26,7 +26,7 @@ import { usageView, USAGE_STALE_MS, SWITCH_SESSION_PCT, SWITCH_WEEK_PCT } from '
 import {
   LABEL, runState, stateText, durationOf, unitWindow, expandSet, askOf, quietMs,
   elapsedText, humanMs, counts, partitionRuns, linkSessions, batchStamped,
-  STALE_MS, liveAsks,
+  STALE_MS, liveAsks, liveBlockers,
   sessionContext, sortRank, blockedNote, FINISHED_MAX_AGE_MS, agentEta, URGENCY, countAsOf,
   attentionModel, attentionCaption, clockAt, goalEta, goalEtaText,
 } from '../public/runs-view.js';
@@ -490,13 +490,13 @@ export function boardDigest(rawBoard, now = null) {
     // age clears the line.
     return now - Date.parse(usage.updated) > USAGE_STALE_MS + 5 * 60_000 ? 1 : 0;
   };
-  // Flips once when a dead run's asks age out at ASK_LIVE_MS, so the phone
-  // stops demanding for them on the next deploy rather than whenever some
+  // Flips once when a quiet run's demand ages out at ASK_LIVE_MS, so the
+  // phone stops demanding on the next deploy rather than whenever some
   // unrelated field next moves. Binary, like usageStale: the flip is the only
-  // digest-visible moment, and a run with a live session never flips (its
-  // asks stay live by definition).
+  // digest-visible moment.
   const askAged = (r) => (now === null ? 0
-    : (r.needsInput?.length ?? 0) > 0 && liveAsks(r, now).length === 0 ? 1 : 0);
+    : (((r.needsInput?.length ?? 0) > 0 && liveAsks(r, now).length === 0)
+      || ((r.blockers?.length ?? 0) > 0 && liveBlockers(r, now).length === 0)) ? 1 : 0);
   return createHash('sha256').update(JSON.stringify({
     active: active.map((r) => [run(r), silence(r), askAged(r)]),
     finished: finished.map(run),
@@ -856,7 +856,7 @@ function runCard(r, now, expanded) {
     // Same rule as the desktop: at scale most runs collapse to one line, and
     // the surfaces must agree about which ones. expandSet decides for both.
     return `
-<article class="run collapsed ${esc(st)}${blockedNote(r) ? ' warn' : ''}${quietMs(r, now) === null ? ' nostamp' : ''}">
+<article class="run collapsed ${esc(st)}${blockedNote(r, now) ? ' warn' : ''}${quietMs(r, now) === null ? ' nostamp' : ''}">
   <div class="hd">
     <i class="rdot"></i>
     <h2>${esc(r.goal)}</h2>
@@ -867,14 +867,14 @@ function runCard(r, now, expanded) {
 </article>`;
   }
   return `
-<article class="run ${esc(st)}${blockedNote(r) ? ' warn' : ''}${quietMs(r, now) === null ? ' nostamp' : ''}">
+<article class="run ${esc(st)}${blockedNote(r, now) ? ' warn' : ''}${quietMs(r, now) === null ? ' nostamp' : ''}">
   <div class="hd">
     <i class="rdot"></i>
     <h2>${esc(r.goal)}</h2>
     <span class="st">${esc(stateText(r, now, r.session))}</span>
   </div>
   ${r.note ? `<p class="note">${esc(r.note)}</p>` : ''}
-  ${ask ? `<p class="ask${blockedNote(r) ? ' warn' : ''}">${esc(ask)}</p>` : ''}
+  ${ask ? `<p class="ask${blockedNote(r, now) ? ' warn' : ''}">${esc(ask)}</p>` : ''}
   ${r.units.length ? `<div class="units">${unitRows(r.units, now)}</div>` : ''}
   ${r.session?.agentsTotal ? `<p class="agents">${
     r.session.agentsTotal + (r.session.agentsCapped || 0)} sub-agents — ${
@@ -1123,7 +1123,7 @@ export async function build(opts = {}) {
   // asking, runs blocked, sessions claiming to work and writing nothing.
   const att = attentionModel({ runs: active, sessions: unpublished }, now);
   const demand = att.demandCount;
-  const expand = expandSet(active);
+  const expand = expandSet(active, now);
 
   // Group by repo, worst urgency first, exactly as the HUD does.
   // URGENCY, imported. This was a hand-copy of it, which is the exact drift
@@ -1143,7 +1143,7 @@ export async function build(opts = {}) {
   const body = active.length
     ? groups.map(([repo, list]) =>
         (groups.length > 1 ? `<p class="repo">${esc(repo)}</p>` : '') +
-        list.sort((a, b) => sortRank(a) - sortRank(b))
+        list.sort((a, b) => sortRank(a, now) - sortRank(b, now))
             .map((r) => runCard(r, now, expand.has(r.runId))).join('')).join('')
     : '<p class="empty">No run is publishing status</p>';
 
