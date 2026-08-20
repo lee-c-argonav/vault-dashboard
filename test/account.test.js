@@ -198,8 +198,25 @@ test('an account that resolved something but renders to nothing says so', () => 
   assert.equal(accountTag({ source: 'partial', plan: null, tier: null }), 'UNKNOWN ACCOUNT');
 });
 
-test('an email without an @ does not produce a broken label', () => {
-  assert.equal(typeof accountTag({ email: 'no-at-sign', source: 'oauth' }, { label: true }), 'string');
+test('a malformed address never becomes a label with no account in it', () => {
+  // Two defects, both in the label branch, both from the same wrong instinct:
+  // repair the address rather than refuse it. Guarding only on `@` being
+  // present threw on a string without one; guarding only on the domain rendered
+  // `@gmail` for `@gmail.com`, which reads like an identity and names nobody.
+  // The rule is that BOTH halves must be there or the address is not used.
+  for (const email of ['no-at-sign', '@gmail.com', 'agent@', '@', '', 'a@.com']) {
+    const bare = accountTag({ email, source: 'oauth' }, { label: true });
+    assert.equal(bare, 'NO ACCOUNT' === bare ? bare : 'UNKNOWN ACCOUNT',
+      `${JSON.stringify(email)} rendered ${JSON.stringify(bare)}`);
+    // With a real identity beside it the row still names the account, from the
+    // uuid: the address is the part that is unusable, not the account.
+    assert.equal(
+      accountTag({ accountUuid: UUID, email, plan: 'max', tier: '20x', source: 'oauth' }, { label: true }),
+      'abcd1234 · MAX 20x', JSON.stringify(email));
+  }
+  // A real address still resolves, and so does one with extra dots.
+  assert.equal(accountTag({ email: 'agent@widget.example', source: 'oauth' }, { label: true }), 'agent@widget');
+  assert.equal(accountTag({ email: 'agent@a.b.c', source: 'oauth' }, { label: true }), 'agent@a');
 });
 
 /* ── runs.js: the field on a run file ───────────────────────────────────── */

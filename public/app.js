@@ -259,7 +259,7 @@ function usageCell(a, view, now) {
 function renderUsage(state) {
   const panel = $('p-usage');
   const now = Date.now();
-  const view = usageView(state.usage ?? null, now);
+  const view = usageView(state.usage ?? null, now, state.remoteAccounts ?? []);
   if (!view) {
     // Hidden, not emptied: an unenrolled machine has nothing to show, and the
     // grid track collapses with the section (see --usage-h in hud.css). The
@@ -273,6 +273,13 @@ function renderUsage(state) {
 
   const sig = JSON.stringify([
     view.updated, view.isStale, view.staleMinutes, view.currentId, view.verdict,
+    // Remote signers, as rendered. The strip repaints on a signature diff, so a
+    // machine that switched accounts would otherwise keep its chip on the old
+    // cell until some unrelated figure happened to move.
+    view.accounts.map((a) => (a.remotes ?? [])
+      .map((r) => `${r.host}${r.stale ? '?' : ''}`).join('+')).join(','),
+    (view.unmatchedRemotes ?? [])
+      .map((r) => `${r.host}:${r.reachable}:${r.uuid8 ?? ''}`).join(','),
     view.accounts.map((a) => [a.id, a.label, a.plan, a.state, a.error,
       a.fiveHourPct, a.fiveHourResetsAt, a.sevenDayPct, a.sevenDayResetsAt,
       a.opusPct, a.sonnetPct, a.fablePct, a.fableResetsAt, a.out,
@@ -325,7 +332,30 @@ function renderUsage(state) {
         ? `frees in ${humanMs(Date.parse(v.nextFree.at) - now)}` : '';
     }
 
-    $('u-accounts').replaceChildren(...view.accounts.map((a) => usageCell(a, view, now)));
+    const cells = view.accounts.map((a) => usageCell(a, view, now));
+    // A remote machine whose account matched no enrolled row. Without this the
+    // strip silently answers "no remote machine is signed in anywhere" to a
+    // question it did not answer: the account may be real and simply not
+    // enrolled here, or the host may never have been reached. Both are states
+    // the operator can act on, and neither is the absence of a machine.
+    for (const r of (view.unmatchedRemotes ?? [])) {
+      const cell = el('div', 'uacct is-unmatched');
+      const head = el('div', 'uacct-head');
+      head.append(el('span', 'uacct-label', r.host));
+      head.append(el('span', 'uchip is-remote is-unsure', r.reachable ? 'not enrolled' : 'no answer'));
+      cell.append(head);
+      const shape = [r.plan?.toUpperCase(), r.tier].filter(Boolean).join(' ');
+      const why = r.reachable
+        ? (r.uuid8
+          ? `on ${r.uuid8}${shape ? ` · ${shape}` : ''}, not enrolled here`
+          : 'signed into nothing this machine can read')
+        : (r.error || 'the last check did not reach it');
+      const sub = el('div', 'uacct-why', why);
+      sub.title = why;
+      cell.append(sub);
+      cells.push(cell);
+    }
+    $('u-accounts').replaceChildren(...cells);
 
     // The one freshness claim, stated only when the figures are not fresh: the
     // poller writes every five minutes, so past fifteen these are its last

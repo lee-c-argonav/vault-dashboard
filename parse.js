@@ -10,6 +10,7 @@ import { partitionRuns, linkSessions, sessionContext } from './public/runs-view.
 import { readSessions } from './sessions.js';
 import { readTranscripts } from './transcripts.js';
 import { readUsage, usageDataDir, withLocalAccount } from './usage.js';
+import { readRemoteAccounts } from './remote.js';
 
 // ── context-window fill ──────────────────────────────────────────────────────
 // The window every session on this machine runs against. Measured 2026-08-12:
@@ -358,6 +359,12 @@ export default async function parseVault(vaultPath) {
   // from the same identity read off local disk; it never overrides a live
   // answer. See its docblock for why the null is common rather than rare.
   const usage = await withLocalAccount(usageRead.usage);
+  // Which account each configured remote machine's CLI is signed into. Read from
+  // a cache that refreshes behind the parse rather than awaited: an SSH round
+  // trip on the critical path of a 10-second board update would stall every
+  // repaint on a machine that is asleep. Empty until the first refresh lands,
+  // and empty when no remote host is configured.
+  const remoteAccounts = readRemoteAccounts();
   // Which sessions are actually alive, and which of them are telling nobody.
   // A run file is the only thing that ever put a session on this board, and
   // writing one is opt-in, so most sessions appeared nowhere. Observed liveness
@@ -545,6 +552,11 @@ export default async function parseVault(vaultPath) {
     // no usage.json exists (normal before enrollment); a broken one is null too
     // and raised a warning above.
     usage,
+    // One entry per configured remote machine: which Claude account its CLI is
+    // signed into, when that was last confirmed, and whether the last check
+    // reached it. Desktop only — the phone's projection is an explicit allowlist
+    // and does not name this, so it is dropped there by construction.
+    remoteAccounts,
     // Carried on State so the partial refresh can feed sessionContext the same
     // finished runs a full parse would — BOTH halves, 15-Runs and the archive.
     // Carrying only the first half was the same oscillation in a smaller form:

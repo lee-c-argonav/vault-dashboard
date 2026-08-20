@@ -70,6 +70,10 @@ function accountView(a, nowMs) {
   return {
     id: str(a?.id),
     label: str(a?.label),
+    // The poller's join key, carried through so a machine that reports its
+    // account as a uuid can be matched to this row. Null on the phone, where
+    // the projection drops it: the uuid is spent resolving ids before publish.
+    uuid: str(a?.uuid),
     plan: str(a?.plan),
     state,
     error: typeof a?.error === 'string' ? a.error : null,
@@ -163,7 +167,58 @@ function verdictFor(accounts, currentId, nextFree) {
  * surfaces hide the strip then, because an unenrolled machine has nothing to
  * show and an absent file is normal, not an error.
  */
-export function usageView(usage, nowMs) {
+
+/**
+ * How old a remote reading is allowed to be before the row stops presenting it
+ * as current.
+ *
+ * DERIVED FROM `REFRESH_MS` in `remote.js`, which is 120s: this is two full
+ * refreshes plus a minute of slack, so one missed pass is not an alarm and two
+ * are. The two constants live in different files because one belongs to the
+ * reader and one to the renderer, and nothing in the language couples them —
+ * changing the refresh interval without changing this makes a chip claim a
+ * freshness it does not have. Named in both places for that reason.
+ */
+export const REMOTE_STALE_MS = 300_000;
+
+/**
+ * Which remote machines are signed into one account, matched by uuid.
+ *
+ * BY UUID, never by label or id: the remote resolves its own account from its
+ * own disk and knows nothing about this machine's enrollment table, so the uuid
+ * is the only thing both sides hold. It is the same key the poller matches on,
+ * which is what keeps a remote chip and the CURRENT chip from naming one account
+ * two ways.
+ *
+ * A reading whose last successful check has aged past REMOTE_STALE_MS, or whose
+ * last check failed, is marked `stale` rather than dropped. Dropping it would
+ * make an unreachable machine and a machine signed into nothing look identical,
+ * which is the 2026-08-10 rule: an empty result and an unreachable source must
+ * never be the same value.
+ */
+export function remoteSignersFor(uuid, remotes, nowMs) {
+  if (!uuid || !Array.isArray(remotes)) return [];
+  const out = [];
+  for (const r of remotes) {
+    if (!r || typeof r !== 'object') continue;
+    const ruuid = typeof r.account?.accountUuid === 'string' ? r.account.accountUuid : null;
+    if (!ruuid || ruuid !== uuid) continue;
+    const at = Date.parse(typeof r.at === 'string' ? r.at : '');
+    const aged = Number.isFinite(at) ? nowMs - at : null;
+    out.push({
+      host: typeof r.host === 'string' ? r.host : '',
+      stale: r.reachable === false || aged === null || aged > REMOTE_STALE_MS,
+      ageMs: aged,
+      error: typeof r.error === 'string' ? r.error : null,
+    });
+  }
+  // Fixed order, so a chip row cannot swap sides between renders and read as a
+  // change. Sorted rather than left in the order the reader happened to return,
+  // which is the configured host order and would reshuffle on an edit to .env.
+  return out.sort((a, b) => a.host.localeCompare(b.host));
+}
+
+export function usageView(usage, nowMs, remotes = []) {
   if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return null;
   const accounts = (Array.isArray(usage.accounts) ? usage.accounts : [])
     .map((a) => accountView(a, nowMs));
@@ -197,6 +252,28 @@ export function usageView(usage, nowMs) {
   // poller matches by uuid, so this only happens mid-enrollment.
   const rawCurrent = typeof usage.currentAccountId === 'string' ? usage.currentAccountId : null;
   const currentId = accounts.some((a) => a.id === rawCurrent) ? rawCurrent : null;
+  // Remote machines, matched onto the account each is signed into. Done here
+  // rather than in the renderer for the same reason signedIn is: an assertion on
+  // rendered output tests the renderer and not the logic.
+  const list = Array.isArray(remotes) ? remotes.filter((r) => r && typeof r === 'object') : [];
+  for (const a of accounts) a.remotes = remoteSignersFor(a.uuid, list, nowMs);
+  // A machine whose account matched no enrolled row still has to be visible, or
+  // the strip silently answers "no remote machine is signed in anywhere" to a
+  // question it did not actually answer. Three ways in: the account is real and
+  // not enrolled here, the host has never been reached, or it resolved nothing.
+  const matched = new Set(accounts.flatMap((a) => a.remotes.map((r) => r.host)));
+  const unmatchedRemotes = list
+    .filter((r) => typeof r.host === 'string' && r.host && !matched.has(r.host))
+    .map((r) => ({
+      host: r.host,
+      uuid8: typeof r.account?.accountUuid === 'string'
+        ? r.account.accountUuid.slice(0, 8) : null,
+      plan: typeof r.account?.plan === 'string' ? r.account.plan : null,
+      tier: typeof r.account?.tier === 'string' ? r.account.tier : null,
+      reachable: r.reachable === true,
+      error: typeof r.error === 'string' ? r.error : null,
+    }))
+    .sort((a, b) => a.host.localeCompare(b.host));
 
   return {
     updated: isoOrNull(usage.updated),
@@ -204,6 +281,7 @@ export function usageView(usage, nowMs) {
     staleMinutes: ageMs === null ? null : Math.floor(ageMs / 60_000),
     currentId,
     accounts,
-    verdict: verdictFor(accounts, currentId, nextFree),
+    unmatchedRemotes,
+    verdict: verdictFor(accounts, currentId, nextFree, nowMs),
   };
 }

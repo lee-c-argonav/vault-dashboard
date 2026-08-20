@@ -436,3 +436,22 @@ test('the account never reaches the rendered page as anything but an id', async 
     await rm(data, { recursive: true, force: true });
   }
 });
+
+test('a remote machine never reaches the published page', () => {
+  // State grows `remoteAccounts`, which carries an email, a handle and a uuid
+  // for another machine. The projection is an explicit allowlist rather than a
+  // spread precisely so a field added upstream cannot ride to the page, and this
+  // asserts that property rather than trusting it.
+  const b = hostileBoard();
+  b.remoteAccounts = [{
+    host: 'sprocket',
+    account: { accountUuid: 'abcd1234-0000-4000-8000-00000000beef',
+      email: 'sprocketeer@firmname.example', handle: 'sprocketeer',
+      plan: 'max', tier: '20x', apiKeyVar: null, source: 'oauth' },
+    at: '2026-08-11T17:55:00Z', reachable: true, error: null,
+  }];
+  const json = JSON.stringify(toPublicBoard(b, NOW));
+  assert.ok(!json.includes('remoteAccounts'), 'the field itself does not ride');
+  assert.ok(!json.includes('sprocket'), 'nor the host name');
+  for (const bad of FORBIDDEN) assert.ok(!json.includes(bad), `"${bad}" survived`);
+});

@@ -857,6 +857,25 @@ body {
    not enrolled, and a key in the environment is a flag that MAY be paying. The
    panel's alarm colours are spent on a run that needs the operator, and lighting
    them for either of these would cost that signal its meaning. */
+/* A remote machine signed into an account. Same chip vocabulary as CURRENT
+   beside it — they answer one question together, "who is on this account" — and
+   deliberately not a warm colour: a second machine being signed in is ordinary,
+   and the strip spends amber on quota. `is-unsure` marks a reading whose last
+   check failed or has aged past twice the refresh interval; it dims rather than
+   warns, because the fact it carries may still be true and only the confidence
+   has lapsed. */
+.uchip.is-remote { color: var(--text-3); border-color: var(--rule-hot); }
+.uchip.is-remote.is-unsure { color: var(--dim); border-color: var(--rule); }
+/* A machine that matched no enrolled account still gets a cell, so the strip
+   cannot answer a question it did not answer by drawing nothing. */
+.uacct.is-unmatched { opacity: .75; }
+.uacct-why {
+  margin-top: 5px;
+  font: 10px/1.4 var(--mono);
+  color: var(--dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
 .run-acct {
   flex: none;
   padding-left: 9px;

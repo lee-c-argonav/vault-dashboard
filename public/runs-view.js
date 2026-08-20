@@ -1567,15 +1567,18 @@ export function accountTag(a, { label = false } = {}) {
   // The address without its top-level domain: enough to tell three accounts
   // apart at a glance, and it never leaves the loopback board.
   //
-  // GUARDED ON THE DOMAIN, because an address is not guaranteed to have one. A
-  // run file's `account` is hand-pasted, so `email` can be a string with no `@`
-  // in it, and indexing past the split then threw straight out of the row —
-  // this line's first version, and the vault's copy of it, both did. A string
-  // that is not an address falls through to the id rather than being repaired
-  // into something that looks like one.
-  const domain = email?.includes('@') ? email.split('@')[1].split('.')[0] : null;
+  // BOTH HALVES ARE REQUIRED, because a run file's `account` is hand-pasted and
+  // `email` can be any string. `at > 0` rejects a missing `@` and a leading one
+  // in the same test: the first version guarded only on the `@` being present
+  // and indexed past the split, which threw; the second guarded on the domain
+  // alone and rendered `@gmail` for `@gmail.com`, a label with no account in it.
+  // Anything that is not an address falls through to the id rather than being
+  // repaired into something that looks like one.
+  const at = email ? email.indexOf('@') : -1;
+  const local = at > 0 ? (acctStr(a.handle) ?? email.slice(0, at)) : null;
+  const domain = at > 0 ? (email.slice(at + 1).split('.')[0] || null) : null;
   const who = label
-    ? (acctStr(a.label) ?? (domain ? `${acctStr(a.handle) ?? email.split('@')[0]}@${domain}` : id))
+    ? (acctStr(a.label) ?? (local && domain ? `${local}@${domain}` : id))
     : id;
 
   const tag = [who, [plan, tier].filter(Boolean).join(' ') || null]
