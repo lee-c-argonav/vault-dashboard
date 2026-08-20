@@ -258,3 +258,32 @@ can produce — a runaway would have had to cross 4GB.
 **Remember:** To verify a threshold on a resource the OS actively manages, lower
 the threshold below ambient. Do not fight the OS for the resource; it will win,
 and the test will have proved nothing.
+
+## 2026-08-20 — reading a rendered row on the local board
+**What didn't work:** Four browser paths in a row. The Claude-in-Chrome extension
+reported not connected. Playwright refused with "Browser is already in use … use
+--isolated", because another session held the profile. `screencapture -l` on the
+HUD's Chrome App window returned "could not create image from window", which is
+what a missing Screen Recording permission looks like. Each failure mode is
+different, and none of them says "try a different tool".
+**What did:** The chrome-devtools MCP server. `new_page` against
+`http://127.0.0.1:5959`, then `evaluate_script` to read `.run-acct` textContent and
+`title` off every row, then `take_screenshot` with a path INSIDE a workspace root —
+it refuses `/tmp` and any absolute path outside one, and a bare relative filename
+works.
+**Remember:** On this machine, reach a local page with chrome-devtools MCP first;
+its screenshot path must be relative or inside a workspace root.
+
+## 2026-08-20 — committing into a tree holding another session's work in the same files
+**What didn't work:** `git add -p` cannot split a hunk whose lines belong to two
+sessions and sit three lines apart. The snapshot literal in `pollOnce` carried this
+session's `accounts:` change and another session's `primeAgentAccountId:` line
+inside one hunk, with no context between them to break on.
+**What did:** Split `git diff` into hunks by hand, kept the ones belonging to this
+session, edited the colliding hunk to drop the other session's line from the `+`
+side, and applied the result with `git apply --cached --recount`. That touches the
+index only, so the worktree keeps their work untouched. Verified by extracting
+`git write-tree` into a temp directory and running the suite there.
+**Remember:** `git apply --cached` on a hand-built patch is the fallback when
+`add -p` cannot split; verify what you staged by checking the written tree out
+somewhere else and running it, never by reading the diff.
