@@ -221,3 +221,35 @@ test('a failed unit still outranks a blocked one for the pivot', () => {
   const w = unitWindow(units);
   assert.ok(w.visible.some((u) => u.state === 'failed'));
 });
+
+test('a run file with no account parses exactly as before', async () => {
+  // `account` was added to the schema on 2026-08-20 and is purely additive.
+  // Nearly every file in the archive predates it, so a reader that does not
+  // know the field must be unchanged by its absence.
+  const root = await vaultWith({ 'a.json': JSON.stringify(base()) });
+  const [r] = await readRuns(root);
+  assert.equal(r.account, null);
+  assert.equal(r.runId, 'widget-1');
+  assert.equal(r.goal, 'Widget goal');
+  assert.deepEqual(r.units, []);
+  await rm(root, { recursive: true, force: true });
+});
+
+test('a malformed account costs the tag, never the row', async () => {
+  // The object is JSON an agent pasted into a run file. One bad field must cost
+  // this row's tag; the row itself, and the parse, carry on.
+  const root = await vaultWith({
+    'a.json': JSON.stringify(base({ runId: 'widget-a', account: 'a string' })),
+    'b.json': JSON.stringify(base({ runId: 'widget-b', account: [] })),
+    'c.json': JSON.stringify(base({ runId: 'widget-c', account: 42 })),
+    'd.json': JSON.stringify(base({ runId: 'widget-d', account: { plan: [], tier: {} } })),
+  });
+  const runs = await readRuns(root);
+  assert.equal(runs.length, 4);
+  for (const r of runs) assert.equal(r.goal, 'Widget goal');
+  assert.equal(runs[0].account, null);
+  assert.equal(runs[1].account, null);
+  assert.equal(runs[2].account, null);
+  assert.equal(runs[3].account.source, 'none', 'an object survives, its bad fields do not');
+  await rm(root, { recursive: true, force: true });
+});

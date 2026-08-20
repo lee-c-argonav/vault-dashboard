@@ -250,6 +250,23 @@ vault:
 The directory defaults to `~/Library/Application Support/vault-hud`; set
 `VAULT_HUD_DATA_DIR` to move it.
 
+**A run row says which of those subscriptions it is spending.** `machine` names
+the computer and stops there, so on a board carrying runs from more than one
+machine and more than one account, neither the computer nor the plan identifies
+the account. A run file's `account.accountUuid` — written by the agent, resolved
+from disk at every write — joins to the same enrollment row the usage strip
+shows, so the two never name one account two ways. The loopback board renders the
+enrollment label, the phone page renders the enrollment id, and the address never
+leaves this machine.
+
+Where the poller can see the run, it wins: a run with a live session on this
+machine is spending whatever account the CLI is on now, not the one its file was
+stamped with. A run from another machine keeps its own.
+
+`account.js` answers the same question from local disk when the poller cannot —
+its reading needs the Keychain and a network call, and comes back empty often
+enough to matter. It reads no token on any branch.
+
 ### One-time enrollment per account
 
 ```sh
@@ -403,6 +420,7 @@ shortcuts.js   the narrow command surface for the action bar
 metrics.js     macOS machine vitals sampler
 runs.js        15-Runs/ and 99-Archive/runs/ → validated run objects
 usage.js       usage.json → normalised snapshot (whitelisted fields, no clock)
+account.js     which Claude account this machine's CLI is signed in as, from disk
 usage-poller.js  polls Claude usage endpoints, rotates OAuth tokens; --once standalone
 usage-enroll.js  enrols CLI credentials into the data directory (add/list/remove)
 sessions.js    live agent sessions, read from the process table (ps + lsof)

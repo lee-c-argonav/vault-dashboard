@@ -12,7 +12,52 @@ const UNIT_STATES = new Set(['todo', 'running', 'done', 'blocked', 'failed']);
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const str = (v, fallback = '') => (typeof v === 'string' ? v : fallback);
+const strOrNull = (v) => (typeof v === 'string' && v !== '' ? v : null);
 const isoOrNull = (v) => (typeof v === 'string' && Number.isFinite(Date.parse(v)) ? v : null);
+
+/**
+ * Which Claude account this run is spending.
+ *
+ * HAND-PASTED JSON, treated as hostile. The standard tells an agent to run
+ * `claude-account.mjs --json` and paste the object into the run file, so what
+ * arrives here has been through a language model and a copy-paste. Every field
+ * is checked to a string or null, and anything that is not an object at all
+ * becomes null rather than throwing: one bad account must cost this row's tag,
+ * never the row and never the parse.
+ *
+ * `source` is DERIVED, not trusted. The writer pastes it alongside the fields it
+ * describes, so the two can arrive contradicting each other — `source: "oauth"`
+ * over a uuid that did not survive the type check reads as a promise of an
+ * identity that is not there. Deriving it from what actually landed makes the
+ * field mean what the standard says it means: what resolved. This is the same
+ * rule usage.js applies to an unrecognised account state, one step further.
+ *
+ * An ABSENT `account` and one that resolved nothing are deliberately different
+ * values. Null is a run file written before the field existed, which is nearly
+ * all of them, and the row shows no tag at all. An object with `source: "none"`
+ * is a writer that looked and found nothing, and the row says NO ACCOUNT.
+ */
+function normaliseAccount(a) {
+  if (!isObj(a)) return null;
+  const accountUuid = strOrNull(a.accountUuid);
+  const email = strOrNull(a.email);
+  const plan = strOrNull(a.plan);
+  const tier = strOrNull(a.tier);
+  return {
+    accountUuid,
+    // Desktop only, and the projection drops it. Kept here because the loopback
+    // board is allowed to name the account in full and the phone is not.
+    email,
+    // Derived when absent rather than required, so a writer that pasted only
+    // the address still gets the short form the desktop renders.
+    handle: strOrNull(a.handle) ?? (email ? email.split('@')[0] : null),
+    plan,
+    tier,
+    // The NAME of an environment variable, never its value. See the standard.
+    apiKeyVar: strOrNull(a.apiKeyVar),
+    source: accountUuid ? 'oauth' : (plan || tier) ? 'partial' : 'none',
+  };
+}
 
 function normaliseUnit(u) {
   return {
@@ -132,6 +177,9 @@ async function readRunDir(dir) {
       project: str(raw.project),
       goal: str(raw.goal, raw.runId),
       machine: str(raw.machine),
+      // Which Claude subscription this run is spending. `machine` names the
+      // computer and stops there, and three subscriptions are enrolled.
+      account: normaliseAccount(raw.account),
       state: RUN_STATES.has(raw.state) ? raw.state : 'running',
       note: str(raw.note),
       // The Terminal tab this run is executing in, so the HUD can focus it.

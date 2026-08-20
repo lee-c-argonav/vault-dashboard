@@ -520,8 +520,23 @@ export async function pollOnce({
       log(`[vault-hud] usage: could not persist account uuids: ${err.message}\n`);
     }
   }
+  // Each account's uuid, published so something other than this file can do the
+  // join. The poller matches by uuid internally and used to write only the
+  // resolved `currentAccountId`, which left the key on one side of a wall and
+  // the enrollment rows on the other: the uuid's only copy was in
+  // usage-tokens.json, which usage.js is forbidden to open. A run file carrying
+  // `account.accountUuid` has no way to reach an enrollment id without this.
+  //
+  // Stamped HERE rather than inside pollAccount, because the identity backfill
+  // above is what fills a missing uuid in, and it runs after the poll loop. Read
+  // from `store` for the same reason: `entries` was built before the backfill.
+  //
+  // Not a secret. It is an opaque account identifier from the profile endpoint,
+  // it names no person, and it is already the join key both surfaces agree on.
+  const uuidById = new Map(store.accounts.map((a) => [a.id, a.uuid ?? null]));
   const snapshot = { schema: 1, updated: new Date(now()).toISOString(),
-    currentAccountId: current.id, accounts: entries };
+    currentAccountId: current.id,
+    accounts: entries.map((e) => ({ ...e, uuid: uuidById.get(e.id) ?? null })) };
   try {
     await writeJsonAtomic(join(dataDir, USAGE_FILE), JSON.stringify(snapshot, null, 2) + '\n');
   } catch (err) {

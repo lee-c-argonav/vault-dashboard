@@ -17,6 +17,7 @@
 import { readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { resolveAccount } from './account.js';
 
 /** Where the poller keeps its state unless VAULT_HUD_DATA_DIR overrides it. */
 export function usageDataDir() {
@@ -49,6 +50,16 @@ function normaliseAccount(a) {
   return {
     id: a.id,
     label: str(a.label) || a.id,
+    // The account's stable identity from the profile endpoint. This is the join
+    // key: a run file records the account it is spending as a uuid, and this is
+    // the only thing that maps one to an enrollment row. Null until the poller's
+    // first successful identity backfill, which is a real state and not an
+    // error — the row still renders, it just cannot be joined to.
+    //
+    // Reading it here does not widen what this module opens. The uuid rides
+    // usage.json, which carries no secrets by schema; the tokens stay in
+    // usage-tokens.json, which this module still never touches.
+    uuid: typeof a.uuid === 'string' && a.uuid ? a.uuid : null,
     plan: str(a.plan),
     // An unrecognised state becomes 'error': the view branches on exactly
     // these three values, and passing an invented one through would make the
@@ -106,4 +117,47 @@ export async function readUsage(dataDir = usageDataDir()) {
     },
     status: 'ok',
   };
+}
+
+/**
+ * The snapshot with `currentAccountId` filled in from disk when the poller could
+ * not answer.
+ *
+ * ONE IDENTITY, TWO READERS. The poller is authoritative and asks the profile
+ * endpoint, matching by account uuid. It comes back with null more often than it
+ * looks: the CLI's token lives in the Keychain, an expired default token is
+ * deliberately never refreshed by the poller (rotating the CLI's own credential
+ * would log it out), and the endpoint is a network call on a laptop that sleeps.
+ * The panel then shows no CURRENT account and the stay-or-switch verdict has
+ * nothing to be relative to — on a board whose whole job is answering which
+ * account to work in.
+ *
+ * `account.js` reads the same uuid off local disk for free and it is matched
+ * against the same enrollment rows, so this adds a reader and never a second
+ * identity. It only ever fills a null: a live reading from the endpoint is
+ * closer to the truth than a file, and a disagreement between them means the
+ * files were rewritten since the poll, which the next poll settles.
+ *
+ * Falls back to nothing when the uuid matches no enrolled account. That is the
+ * honest answer — the CLI is signed into an account this machine never enrolled,
+ * and inventing a row for it would put an account on the panel with no quota
+ * behind it.
+ *
+ * @param {object|null} usage a snapshot from readUsage
+ * @param {() => Promise<object>} read injected for tests
+ */
+export async function withLocalAccount(usage, read = resolveAccount) {
+  if (!usage || usage.currentAccountId) return usage;
+  let local;
+  try {
+    local = await read();
+  } catch {
+    // A resolver that throws must cost the fallback, never the panel.
+    return usage;
+  }
+  const uuid = typeof local?.accountUuid === 'string' && local.accountUuid
+    ? local.accountUuid : null;
+  if (!uuid) return usage;
+  const hit = usage.accounts.find((a) => a.uuid && a.uuid === uuid);
+  return hit ? { ...usage, currentAccountId: hit.id } : usage;
 }

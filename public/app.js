@@ -6,7 +6,7 @@
 // Both import it so the two surfaces cannot disagree about whether a run is
 // waiting on you. Liveness lives here, not in State: State is diffed by
 // stringify below, so a clock-derived field would look changed on every push.
-import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText, sessionActivity, mergedRank, attentionModel, attentionCaption, agentEta, contextBreakdown, clockAt, finishClock, goalEta, goalEtaText, fanoutGantt, contextOf, countAsOf, groupDuration, sectionKeyOf, sectionLabelOf, gpuOffenderShown, gpuOffenderText, hotOffenderText, liveAsks }
+import { runState, quietMs, stateText, rowSignature, eta, humanMs, etaText, elapsedText, durationOf, unitWindow, expandSet, URGENCY, sortRank, blockedNote, batchStamped, askOf, counts, sessionText, sessionActivity, mergedRank, attentionModel, attentionCaption, agentEta, contextBreakdown, clockAt, finishClock, goalEta, goalEtaText, fanoutGantt, contextOf, countAsOf, groupDuration, sectionKeyOf, sectionLabelOf, gpuOffenderShown, gpuOffenderText, hotOffenderText, liveAsks, accountFor, accountTag }
   from './runs-view.js';
 
 // The usage strip's whole derivation, shared with the phone build so the two
@@ -675,7 +675,7 @@ function ctxMeter(ctx) {
   return m;
 }
 
-function runRow(r, now, expanded = true) {
+function runRow(r, now, expanded = true, usage = null) {
   const st = runState(r, now);
   const nostamp = quietMs(r, now) === null;
   // `is-warn` marks a run that is working with something blocked. Without it
@@ -700,6 +700,35 @@ function runRow(r, now, expanded = true) {
   const goal = el('span', 'run-goal', r.goal);
   goal.title = r.goal;
   top.append(goal, el('span', 'run-proj', r.machine || ''));
+  // Which Claude subscription this run is spending, beside the machine it is
+  // spending it on. The two answer one question and `machine` alone has never
+  // answered it: three subscriptions are enrolled and the ones in daily use are
+  // all the same plan, so neither the computer nor the plan identifies the
+  // account.
+  //
+  // On COLLAPSED rows too, deliberately. Only the five most urgent runs expand,
+  // and the run this field was built for is a Spark run that will usually be
+  // below that line. A field visible only on the rows already being read is a
+  // field that answers the question for whoever did not need to ask it.
+  //
+  // `label: true` is the loopback call: this board is served to 127.0.0.1 and
+  // renders the enrollment label the usage strip above already shows. The phone
+  // build never passes it and gets the enrollment id.
+  const acct = accountFor(r, usage);
+  if (acct) {
+    const tag = el('span', 'run-acct', accountTag(acct, { label: true }));
+    // The full detail on hover: the id the phone sees, the uuid the join is
+    // made on, and what actually resolved. `source` is here rather than in the
+    // tag because a reader who wants it is already asking a second question.
+    tag.title = [
+      acct.label || acct.email || null,
+      acct.id ? `enrolled as ${acct.id}` : 'not enrolled on this machine',
+      acct.accountUuid ? `uuid ${acct.accountUuid}` : null,
+      `source ${acct.source ?? 'unknown'}`,
+      acct.apiKeyVar ? `${acct.apiKeyVar} is set in the environment; it may be paying instead` : null,
+    ].filter(Boolean).join('\n');
+    top.append(tag);
+  }
   // stateText, not a hand-built string. build.js renders the same label and the
   // shared module exists so the two surfaces cannot drift apart on it.
   top.append(el('span', 'run-state', stateText(r, now, r.session)));
@@ -1110,7 +1139,7 @@ function agentList(agents, capped, now) {
 
 let runsSig = null;
 
-function renderRuns(runs, sessions = []) {
+function renderRuns(runs, sessions = [], usage = null) {
   const now = Date.now();
   const needing = runs.filter((r) => runState(r, now) === 'needs-input').length;
   $('p-runs').classList.toggle('hot', needing > 0);
@@ -1133,7 +1162,7 @@ function renderRuns(runs, sessions = []) {
   // and therefore copy. Signature includes the rendered state text, so a quiet
   // counter still ticks over, roughly once a minute instead of every 10 seconds.
   const sig = [
-    ...runs.map((r) => rowSignature(r, now)),
+    ...runs.map((r) => rowSignature(r, now, usage)),
     // Sessions carry a clock-derived uptime, so the bucket goes in the
     // signature for the same reason unit timers do: without it the line freezes
     // at whatever it first said.
@@ -1160,7 +1189,7 @@ function renderRuns(runs, sessions = []) {
   ].join('\n');
   if (sig !== runsSig) {
     runsSig = sig;
-    fill('runs-list', groupedRows(runs, sessions, now), 'NOTHING IS RUNNING');
+    fill('runs-list', groupedRows(runs, sessions, now, usage), 'NOTHING IS RUNNING');
   }
   flashIfChanged($('p-runs'), [runs, sessions]);
 }
@@ -1183,7 +1212,7 @@ function renderRuns(runs, sessions = []) {
  * AND branch (sectionKeyOf): two branches of one repo list apart, and two
  * repos that happen to share a branch name do not merge into one section.
  */
-function groupedRows(runs, sessions, now) {
+function groupedRows(runs, sessions, now, usage = null) {
   const expand = expandSet(runs, now);
   const bySection = new Map();
   const put = (key, item) => {
@@ -1228,7 +1257,9 @@ function groupedRows(runs, sessions, now) {
     // and one of those two may be dead.
     for (const item of list.sort((a, b) => mergedRank(a, now) - mergedRank(b, now)
       || String(a.runId || a.name || '').localeCompare(String(b.runId || b.name || '')))) {
-      rows.push(item.runId ? runRow(item, now, expand.has(item.runId)) : sessionRow(item, now));
+      rows.push(item.runId
+      ? runRow(item, now, expand.has(item.runId), usage)
+      : sessionRow(item, now));
     }
   }
   return rows;
@@ -1704,7 +1735,7 @@ function render(state) {
   // stops writing produces byte-identical State and a guard would freeze its
   // quiet time forever. fill() keeps scroll position, so an unguarded repaint
   // costs what every other panel already pays.
-  renderRuns(state.runs || [], state.sessions || []);
+  renderRuns(state.runs || [], state.sessions || [], state.usage ?? null);
   renderLattice(state);
   renderWarnings(state);
   renderFooter(state);

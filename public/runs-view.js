@@ -1117,9 +1117,17 @@ export function stateText(run, now, session = null) {
 // Rows only need rebuilding when what they display changes. Runs repaint on
 // every 10s broadcast, and a rebuild destroys text selection, so the panel's
 // own question could never be copied.
-export function rowSignature(run, now) {
+export function rowSignature(run, now, usage = null) {
   return [
     run.runId, run.goal, run.project, run.machine, run.note,
+    // The account tag as RENDERED, not `run.account`. What the row shows is a
+    // resolution of the run file against the usage panel, so it moves when the
+    // poller sees a switch even though the run file never changed — which is
+    // precisely the case the tag was added for. Hashing the raw field would
+    // freeze the row on the account it started on. `usage` is optional so no
+    // existing caller loses rows by not knowing about it; a caller that omits
+    // it gets the run file's own answer, which is what it renders.
+    accountTag(accountFor(run, usage)),
     // `run.session` is part of what the row renders now: it decides QUIET versus
     // NO UPDATE. Left out of the signature, a run whose session exits keeps
     // claiming the session is alive until something else changes.
@@ -1454,4 +1462,126 @@ export const GPU_HOT_SHOW = 35;
 /** Whether this metrics frame gets its GPU offender named. */
 export function gpuOffenderShown(m) {
   return Boolean(m.gpuHot && m.gpu != null && m.gpu >= GPU_HOT_SHOW);
+}
+
+/* ── which Claude account a run is spending ─────────────────────────────── */
+
+const isAcctObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+const acctStr = (v) => (typeof v === 'string' && v !== '' ? v : null);
+
+/**
+ * The account a run row should name, resolved against the usage panel.
+ *
+ * KEYED ON `accountUuid`, which is the poller's own join key. It matches the
+ * signed-in account by account uuid from the profile endpoint rather than by
+ * token string, because both the CLI and the poller rotate their own copies.
+ * Using anything else here would let a run row and the usage strip three inches
+ * above it name the same account differently.
+ *
+ * THE POLLER WINS, BUT ONLY ON A RUN THAT IS RUNNING HERE. A run file's account
+ * is stamped at a moment and the poller's reading is live, so a file written
+ * before a mid-session switch names the account the run has stopped spending —
+ * the switch was observed inside one session on 2026-08-20. But the poller
+ * observes the CLI on the machine the daemon runs on, and the board carries runs
+ * from machines it has never seen. Nothing in State names the daemon's own
+ * machine: `run.machine` is agent-written free text and no hostname reaches
+ * here. `run.session` is the evidence that was already available — sessions are
+ * read from this machine's process table, so a linked run is provably local. A
+ * remote run keeps whatever its own file resolved.
+ *
+ * WHEN THEY DISAGREE NOTHING IS CARRIED ACROSS. The plan and tier in the run
+ * file describe the account the file names, so pairing them with a different
+ * account's id would produce a row that is wrong in a way no field admits to.
+ * The whole object is replaced by what the enrollment row can say. `apiKeyVar`
+ * survives because it is a property of the session's environment rather than of
+ * the account.
+ *
+ * @param {object|null} run
+ * @param {object|null} usage State.usage, or null on a machine with no poller
+ * @returns {object|null} an account to render, or null when the run has none
+ */
+export function accountFor(run, usage = null) {
+  // Filtered to objects, not merely checked for an array. usage.js normalises
+  // this, but accountFor is called from the phone build against an already
+  // projected board and from tests against hand-built ones, and `.find` on a
+  // null entry throws out of the renderer.
+  const accounts = (Array.isArray(usage?.accounts) ? usage.accounts : []).filter(isAcctObj);
+  const a = isAcctObj(run?.account) ? run.account : null;
+  const enrolled = (pick) => accounts.find(pick) ?? null;
+
+  const live = run?.session && acctStr(usage?.currentAccountId)
+    ? enrolled((x) => x.id === usage.currentAccountId)
+    : null;
+
+  if (live) {
+    // Agreeing, or a local run whose file never carried an account: the run
+    // file's shape is about this same account, so it is kept and only the
+    // identity is filled in.
+    if (!a?.accountUuid || a.accountUuid === live.uuid) {
+      return { ...(a ?? { plan: null, tier: null, apiKeyVar: null }),
+        id: live.id, label: live.label,
+        plan: a?.plan ?? acctStr(live.plan), source: 'oauth' };
+    }
+    return { id: live.id, label: live.label, accountUuid: live.uuid ?? null,
+      email: null, handle: null, plan: acctStr(live.plan), tier: null,
+      apiKeyVar: a.apiKeyVar ?? null, source: 'oauth' };
+  }
+
+  if (!a) return null;
+  // Not local, or no poller on this machine. The run file is the only source.
+  // Its uuid still resolves to an enrollment row when the account is one this
+  // machine has enrolled, which is what keeps a Spark run and the usage strip
+  // speaking the same vocabulary.
+  const row = a.accountUuid ? enrolled((x) => x.uuid && x.uuid === a.accountUuid) : null;
+  return row ? { ...a, id: row.id, label: row.label } : a;
+}
+
+/**
+ * The face of it.
+ *
+ * TWO SURFACES, TWO IDENTITIES, and the split is the one already settled for
+ * the usage panel on 2026-08-12: the loopback desktop renders the enrollment
+ * label, the phone renders the enrollment id. The label is operator free text
+ * and the first real ones were email addresses, which the publish gate caught.
+ * `label: true` is the desktop call and must never be made by the phone build.
+ *
+ * EVERY FIELD IS TREATED AS UNTRUSTED. A run file's `account` is JSON a language
+ * model pasted in, runs.js is written to drop a malformed one to null, and this
+ * is handed null and garbage by design. It must never throw: a bad account costs
+ * this row its tag, never the row.
+ *
+ * The fallbacks are ordered by how much the reader can act on them. An
+ * enrollment identity first, because it is the vocabulary the usage strip
+ * already uses. Then the uuid's first eight characters, which name the account
+ * without naming a person. Then the subscription shape alone, for an account
+ * this machine has not enrolled.
+ */
+export function accountTag(a, { label = false } = {}) {
+  if (!isAcctObj(a)) return 'NO ACCOUNT';
+  if (a.source === 'none') return 'NO ACCOUNT';
+
+  const plan = acctStr(a.plan)?.toUpperCase() ?? null;
+  const tier = acctStr(a.tier);
+  const email = acctStr(a.email);
+  const id = acctStr(a.id) ?? acctStr(a.accountUuid)?.slice(0, 8) ?? null;
+  // The address without its top-level domain: enough to tell three accounts
+  // apart at a glance, and it never leaves the loopback board.
+  //
+  // GUARDED ON THE DOMAIN, because an address is not guaranteed to have one. A
+  // run file's `account` is hand-pasted, so `email` can be a string with no `@`
+  // in it, and indexing past the split then threw straight out of the row —
+  // this line's first version, and the vault's copy of it, both did. A string
+  // that is not an address falls through to the id rather than being repaired
+  // into something that looks like one.
+  const domain = email?.includes('@') ? email.split('@')[1].split('.')[0] : null;
+  const who = label
+    ? (acctStr(a.label) ?? (domain ? `${acctStr(a.handle) ?? email.split('@')[0]}@${domain}` : id))
+    : id;
+
+  const tag = [who, [plan, tier].filter(Boolean).join(' ') || null]
+    .filter(Boolean).join(' · ');
+  // UNKNOWN ACCOUNT, not an empty string: an account object that resolved
+  // something and rendered to nothing is a defect, and a blank slot is how it
+  // would hide.
+  return (tag || 'UNKNOWN ACCOUNT') + (acctStr(a.apiKeyVar) ? ' +KEY' : '');
 }

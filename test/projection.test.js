@@ -43,9 +43,29 @@ function hostileBoard() {
     runId: 'r-1', project: 'p', goal: 'g', machine: 'laptop', state: 'running',
     note: '', tty: '', started: '2026-08-11T14:00:00Z', updated: '2026-08-11T17:00:00Z',
     wrote: '2026-08-11T17:00:00Z', units: [], needsInput: [], blockers: [],
+    // Which Claude account the run is spending. The address and the handle are
+    // loopback-only, the same rule the usage section's label already follows.
+    account: {
+      accountUuid: 'abcd1234-0000-4000-8000-00000000beef',
+      email: 'sprocketeer@firmname.example', handle: 'sprocketeer',
+      plan: 'max', tier: '20x', apiKeyVar: null, source: 'oauth',
+    },
     session: { ...session },
   };
-  return { active: [run], finished: [], unpublished: [session], skipped: 0 };
+  // The enrollment table the uuid joins through. Its labels are operator free
+  // text and the first real ones were email addresses, which is why the usage
+  // projection drops them.
+  const usage = {
+    updated: '2026-08-11T17:55:00Z',
+    currentAccountId: null,
+    accounts: [{
+      id: 'acctA', label: 'sprocketeer@firmname', uuid: 'abcd1234-0000-4000-8000-00000000beef',
+      plan: 'max', state: 'ok', error: null, fetchedAt: '2026-08-11T17:55:00Z',
+      fiveHour: { utilization: 12.4, resetsAt: '2026-08-11T20:00:00Z' },
+      sevenDay: null, sevenDayOpus: null, sevenDaySonnet: null, sevenDayFable: null,
+    }],
+  };
+  return { active: [run], finished: [], unpublished: [session], usage, skipped: 0 };
 }
 
 /** Every substring that must not survive the projection. */
@@ -62,6 +82,17 @@ const FORBIDDEN = [
   'lib/auth/scope.ts',
   'Dana',
   '/dev/ttys009',
+  // The account's identity. The enrollment id is publishable and these are not:
+  // the publish gate blocked this page once over email-address labels on the
+  // usage panel, and the same rule binds a run row.
+  'sprocketeer@firmname.example',
+  'sprocketeer@firmname',
+  'sprocketeer',
+  // The uuid is spent inside the projection, resolving the enrollment id, and
+  // dropped. Publishing it would put the key on the page with nothing left for
+  // it to unlock.
+  'abcd1234-0000-4000-8000-00000000beef',
+  'abcd1234',
 ];
 
 test('the projection drops every confidential field', () => {
@@ -309,4 +340,99 @@ test('a heavy tail still yields a forward estimate, not an overrun', () => {
   const s = toPublicBoard(b, NOW).unpublished[0];
   assert.equal(s.etaOver, false, 'called an ordinary agent an overrun');
   assert.ok(s.etaMins > 0, 'no forward estimate was published');
+});
+
+/* ── the account tag on a published run row ─────────────────────────────── */
+
+test('the run account is projected to an enrollment id and nothing else', () => {
+  const p = toPublicBoard(hostileBoard(), NOW);
+  assert.deepEqual(p.active[0].account, {
+    id: 'acctA', plan: 'max', tier: '20x', apiKeyVar: null, source: 'oauth',
+  });
+  // Named individually as well as through FORBIDDEN, so the reason each one is
+  // gone survives a future edit to that list.
+  assert.equal(p.active[0].account.email, undefined);
+  assert.equal(p.active[0].account.handle, undefined);
+  assert.equal(p.active[0].account.accountUuid, undefined);
+  assert.equal(p.usage.accounts[0].uuid, undefined, 'the key does not ride to the page');
+  assert.equal(p.usage.accounts[0].label, undefined);
+});
+
+test('projecting an already-projected board keeps the account', () => {
+  // boardDigest hashes the projection and documents itself as doing so, which
+  // invites a second pass. Without idempotency the second pass finds no uuid to
+  // resolve from and would blank the id, so the digest could never move on the
+  // account again. Same requirement as agentsOut.
+  const once = toPublicBoard(hostileBoard(), NOW);
+  const twice = toPublicBoard(once, NOW);
+  assert.deepEqual(twice.active[0].account, once.active[0].account);
+});
+
+test('the digest moves when the account does, and not otherwise', () => {
+  const a = hostileBoard();
+  const b = hostileBoard();
+  b.active[0].account = { ...b.active[0].account, accountUuid: 'ffffffff-0000-4000-8000-00000000feed' };
+  assert.notEqual(boardDigest(a, NOW), boardDigest(b, NOW),
+    'a run that switched account must reach the phone');
+  const c = hostileBoard();
+  c.active[0].account = { ...c.active[0].account, email: 'someone-else@firmname.example' };
+  assert.equal(boardDigest(a, NOW), boardDigest(c, NOW),
+    'a field the page may not publish must not fire a deploy');
+});
+
+test('a run whose file predates the field publishes no account and renders no tag', () => {
+  const b = hostileBoard();
+  delete b.active[0].account;
+  delete b.usage;
+  assert.equal(toPublicBoard(b, NOW).active[0].account, null);
+});
+
+test('the account never reaches the rendered page as anything but an id', async () => {
+  // RENDERS, with its own enrollment table, so this cannot pass by reading a
+  // machine that happens to have no accounts enrolled. The data dir is
+  // redirected for the same reason the vault is: a test that reads the real one
+  // asserts something different on every machine.
+  const vault = await mkdtemp(join(tmpdir(), 'vh-acct-'));
+  const out = await mkdtemp(join(tmpdir(), 'vh-acct-out-'));
+  const data = await mkdtemp(join(tmpdir(), 'vh-acct-data-'));
+  await mkdir(join(vault, '15-Runs'), { recursive: true });
+  await writeFile(join(vault, '15-Runs', 'r-1.json'), JSON.stringify({
+    schema: 1, runId: 'r-1', project: 'p', goal: 'g', machine: 'laptop',
+    state: 'running', note: '', started: '2026-08-11T14:00:00Z',
+    updated: '2026-08-11T17:00:00Z', needsInput: [], blockers: [], units: [],
+    account: {
+      accountUuid: 'abcd1234-0000-4000-8000-00000000beef',
+      email: 'sprocketeer@firmname.example', handle: 'sprocketeer',
+      plan: 'max', tier: '20x', apiKeyVar: null, source: 'oauth',
+    },
+  }));
+  await writeFile(join(data, 'usage.json'), JSON.stringify({
+    schema: 1, updated: '2026-08-11T17:55:00Z', currentAccountId: null,
+    accounts: [{
+      id: 'acctA', label: 'sprocketeer@firmname', uuid: 'abcd1234-0000-4000-8000-00000000beef',
+      plan: 'max', state: 'ok', error: null, fetchedAt: '2026-08-11T17:55:00Z',
+      fiveHour: { utilization: 12.4, resetsAt: '2026-08-11T20:00:00Z' },
+    }],
+  }));
+  const prevData = process.env.VAULT_HUD_DATA_DIR;
+  process.env.VAULT_HUD_DATA_DIR = data;
+  try {
+    const html = await readFile(await build({ vault, outDir: out, now: NOW, sessions: [] }), 'utf8');
+    for (const bad of ['sprocketeer@firmname.example', 'sprocketeer@firmname',
+      'sprocketeer', 'abcd1234-0000-4000-8000-00000000beef', 'abcd1234']) {
+      assert.ok(!html.includes(bad), `"${bad}" reached the rendered page`);
+    }
+    // And the tag was actually drawn, so the assertions above meant something.
+    // The literal string, not what the eye sees: .acct uppercases in CSS, and
+    // asserting the rendered case would pass against a tag that lost its
+    // identity and kept its styling.
+    assert.match(html, /class="acct">acctA · MAX 20x</,
+      'the enrollment id and the subscription shape are what the page shows');
+  } finally {
+    if (prevData === undefined) delete process.env.VAULT_HUD_DATA_DIR;
+    else process.env.VAULT_HUD_DATA_DIR = prevData;
+    await rm(vault, { recursive: true, force: true });
+    await rm(out, { recursive: true, force: true });
+    await rm(data, { recursive: true, force: true });
+  }
 });

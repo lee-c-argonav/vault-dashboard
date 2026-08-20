@@ -55,6 +55,7 @@ server.js                 http + SSE + fs.watch
 parse.js                  markdown → State
 usage.js                  usage.json → normalized accounts, whitelisted fields
 usage-poller.js           OAuth usage poll → data dir, started with the server
+account.js                which Claude account this machine's CLI is on, from disk
 metrics.js                machine vitals, sampled on a timer
 public/index.html         layout shell
 public/hud.css            theme
@@ -251,6 +252,50 @@ writing it (a checkout, an rsync) resets mtime and makes a dead run look recent.
 That is rarer and more visible than the clock skew it replaces. `NEEDS YOU · QUIET 1h04m` is a run that asked a question and then
 died; collapsing that into a single `stale` state would hide the question.
 
+`account` is which Claude subscription the run is spending, added 2026-08-20.
+`machine` names the computer and stops there; three subscriptions are enrolled
+and every one in daily use is the same plan, so neither the computer nor the plan
+identifies the account. The field is purely additive — a run file without it
+parses exactly as before, which is nearly every file in the archive — and it is
+resolved from disk at every write rather than captured once, because the
+signed-in account was observed changing inside a single session on 2026-08-20.
+
+It is hand-pasted JSON and `runs.js` treats it as hostile: every field is checked
+to a string or null, a non-object becomes null, and nothing throws. `source` is
+DERIVED from what survived that check rather than trusted, so the field cannot
+promise an identity the object does not carry.
+
+`accountUuid` is the only field that joins. It is the same key `usage-poller.js`
+matches the signed-in account by — from the profile endpoint, never by token
+string, because both the CLI and the poller rotate their own copies — so a run
+row and the usage strip resolve to the same enrollment row instead of naming one
+account two ways. The poller publishes each account's uuid on its `usage.json`
+entry for exactly this join; before 2026-08-20 the only copy lived in
+`usage-tokens.json`, which `usage.js` may not open, so the key and the table it
+unlocks sat on opposite sides of a wall.
+
+`accountFor(run, usage)` in `public/runs-view.js` decides what a row names, and
+both surfaces call it. The poller's live reading beats the run file, but only on
+a run with a linked session: sessions are read from this machine's process table,
+so a linked run is provably local, and nothing else on the board is. Applying
+this machine's current account to every row would stamp the MacBook's account
+onto a Spark run. When the two disagree the poller's account replaces the object
+whole; carrying a plan or tier across from a different account would produce a
+row wrong in a way no field admits to.
+
+`email` and `handle` are loopback-only. `toPublicBoard()` drops both, along with
+`accountUuid`, the way it already drops the usage section's `label` — the publish
+gate blocked this page once over email-address labels, and the scan's exempt list
+is deliberately not extended to cover them. The phone holds `{ id, plan, tier,
+apiKeyVar, source }` and renders the enrollment id.
+
+`apiKeyVar` names an environment variable and never its value, and never replaces
+the account. A key present in the environment may be paying instead of the
+subscription and disk alone cannot settle it: an interactive session has to
+approve the key once, and a rejected key leaves the subscription paying. It
+renders as a `+KEY` flag beside the account, dim rather than warm, because it is
+not a fault.
+
 `started`/`ended` on completed units are what make the ETA measured. A completed
 unit missing either is invisible to the estimate, and the estimate is suppressed
 entirely below three samples.
@@ -328,6 +373,27 @@ Two modules, with separate trust levels:
   `"broken"` (present but unparseable) yields null plus a `warnings` entry,
   because an empty usage panel with nothing saying why reads as "no
   subscriptions enrolled", which is a false statement.
+
+Each account carries its `uuid` from 2026-08-20, stamped onto the snapshot after
+the poller's identity backfill. It is not a secret — an opaque account identifier
+from the profile endpoint, naming no person — and it is the join key a run file's
+`account.accountUuid` resolves through. Null until the first successful backfill,
+which is a real state rather than an error: the row renders, it just cannot be
+joined to. It reaches State and stops there; `toPublicBoard()` drops it, because
+the join is done before the projection returns and the page has nothing left to
+unlock with it.
+
+**`account.js` is the disk-side fallback for the same question.** `readUsage`
+answers "which account is the CLI on" only when the poller could ask the profile
+endpoint, and the CLI's token lives in the Keychain, an expired default token is
+deliberately never refreshed here (rotating the CLI's own credential would log it
+out), and the endpoint is a network call. `account.js` reads the same identity
+off `.claude.json` and `.credentials.json` for free — no network, no Keychain, no
+token on any branch, the credentials file opened for exactly `subscriptionType`
+and `rateLimitTier`. It is a second READER of one identity, never a second
+identity: the uuid it returns is the poller's own join key. On a machine with no
+poller at all it is the only answer, which is what the vault's copy was written
+for.
 
 There is deliberately no `fs.watch` on `usage.json`: it changes every 300s at
 most, and the 10s safety re-parse picks each write up within one interval.

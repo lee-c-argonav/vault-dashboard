@@ -9,7 +9,7 @@ import { readRunsDetailed, readFinishedRunsDetailed } from './runs.js';
 import { partitionRuns, linkSessions, sessionContext } from './public/runs-view.js';
 import { readSessions } from './sessions.js';
 import { readTranscripts } from './transcripts.js';
-import { readUsage, usageDataDir } from './usage.js';
+import { readUsage, usageDataDir, withLocalAccount } from './usage.js';
 
 // ── context-window fill ──────────────────────────────────────────────────────
 // The window every session on this machine runs against. Measured 2026-08-12:
@@ -353,6 +353,11 @@ export default async function parseVault(vaultPath) {
   // without it.
   const dataDir = usageDataDir();
   const usageRead = await readUsage(dataDir);
+  // The poller answers "which account is the CLI on" over the network and comes
+  // back with null whenever it could not ask. withLocalAccount fills that null
+  // from the same identity read off local disk; it never overrides a live
+  // answer. See its docblock for why the null is common rather than rare.
+  const usage = await withLocalAccount(usageRead.usage);
   // Which sessions are actually alive, and which of them are telling nobody.
   // A run file is the only thing that ever put a session on this board, and
   // writing one is opt-in, so most sessions appeared nowhere. Observed liveness
@@ -539,7 +544,7 @@ export default async function parseVault(vaultPath) {
     // recommendation are all derived in public/usage-view.js instead. null when
     // no usage.json exists (normal before enrollment); a broken one is null too
     // and raised a warning above.
-    usage: usageRead.usage,
+    usage,
     // Carried on State so the partial refresh can feed sessionContext the same
     // finished runs a full parse would — BOTH halves, 15-Runs and the archive.
     // Carrying only the first half was the same oscillation in a smaller form:

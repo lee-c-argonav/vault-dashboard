@@ -845,6 +845,28 @@ body {
   color: var(--dim);
 }
 
+/* Which Claude subscription the run is spending. Same vocabulary as the machine
+   beside it — they answer one question together — with a hairline in front so
+   two dim mono runs do not read as one string. The tag carries its own `·`
+   between the account and the plan, so a third separator glyph here would make
+   the line ambiguous about which part is which; the rule and .run-top's 9px gap
+   do that job without adding one.
+
+   DIM, never orange or amber. NO ACCOUNT and +KEY are both dim for the same
+   reason: neither is a fault. An unresolved account is a machine the poller has
+   not enrolled, and a key in the environment is a flag that MAY be paying. The
+   panel's alarm colours are spent on a run that needs the operator, and lighting
+   them for either of these would cost that signal its meaning. */
+.run-acct {
+  flex: none;
+  padding-left: 9px;
+  border-left: 1px solid var(--rule);
+  font: 10px/1 var(--mono);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
 /* An outlined chip by default, inverted only when it needs the operator. .wglyph reserves
    inversion for the warning strip; this is the panel's one alarm and it is small
    on purpose. Size carries the signal, not a field of colour. */

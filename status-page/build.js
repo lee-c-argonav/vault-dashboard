@@ -29,6 +29,7 @@ import {
   STALE_MS, liveAsks, liveBlockers,
   sessionContext, sortRank, blockedNote, FINISHED_MAX_AGE_MS, agentEta, URGENCY, countAsOf,
   attentionModel, attentionCaption, clockAt, goalEta, goalEtaText,
+  accountFor, accountTag,
 } from '../public/runs-view.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -286,6 +287,11 @@ export function toPublicBoard(board, now) {
           // No `label`: it is operator free text and the first real ones were
           // email addresses, which the publish scan caught. The phone renders
           // the enrollment id; labels stay on the loopback desktop.
+          //
+          // No `uuid` either. It reaches State so a run row can be joined to an
+          // enrollment, and that join is done above, before this projection
+          // returns. Publishing it would put the key on the page with nothing
+          // left for it to unlock.
           plan: a.plan ?? '',
           state: a.state ?? 'error',
           error: a.error ?? null,
@@ -298,11 +304,55 @@ export function toPublicBoard(board, now) {
     };
   };
 
+  /**
+   * Which Claude subscription a run is spending, coarsened to an identity the
+   * phone is allowed to hold.
+   *
+   * RESOLVED HERE AND THE UUID SPENT, not published. The phone renders the
+   * enrollment id, and the only thing that maps a run file's `accountUuid` to
+   * one is the enrollment table. Doing that lookup on the phone would mean
+   * publishing the uuid to it. Doing it here means the page holds an id it can
+   * render and nothing it cannot, which is this boundary's standing doctrine:
+   * the page cannot render what it never holds.
+   *
+   * `accountFor` is the same function the desktop calls, so the two surfaces
+   * resolve identically — including the rule that the poller's live reading
+   * wins on a run with a session on this machine.
+   *
+   * DROPPED: `email` and `handle`, the way `label` is already dropped from the
+   * usage section. Not masked — dropped. The publish gate blocked this page once
+   * over email-address labels on the usage panel, and the exempt list is
+   * deliberately not extended to cover these: exempting operator-authored
+   * identifiers is how that gate dies. `accountUuid` goes too. It is not an
+   * identifier the gate cares about, and once the id is resolved the row has no
+   * use for it.
+   *
+   * KEPT: `plan` and `tier`, which describe the subscription and name nobody,
+   * and `apiKeyVar`, which is the NAME of an environment variable from a fixed
+   * two-value vocabulary and never its value. `source` rides along so the shared
+   * tag renders NO ACCOUNT here exactly as it does on the desktop.
+   *
+   * Idempotent: a second pass finds `id` already resolved and no uuid left to
+   * resolve from, and returns the same object. Same requirement as agentsOut.
+   */
+  const account = (r) => {
+    const a = accountFor(r, board.usage);
+    if (!a) return null;
+    return {
+      id: a.id ?? null,
+      plan: a.plan ?? null,
+      tier: a.tier ?? null,
+      apiKeyVar: a.apiKeyVar ?? null,
+      source: a.source ?? 'none',
+    };
+  };
+
   const run = (r) => ({
     runId: r.runId,
     project: r.project,
     goal: r.goal,
     machine: r.machine,
+    account: account(r),
     state: r.state,
     note: r.note,
     started: r.started,
@@ -453,6 +503,12 @@ export function boardDigest(rawBoard, now = null) {
   // board. The same hash-a-projected-away-field defect fixed for sessions below.
   const run = (r) => [r.runId, r.project, r.goal, r.machine, r.state, r.note,
     r.started, r.updated,
+    // The account tag as rendered. The card shows it, and it moves without any
+    // other field moving: the poller sees a switch on this machine and the run
+    // file is untouched. Left out, the published page would name the account the
+    // run started on until something unrelated changed — the same
+    // hash-what-the-card-renders defect already fixed twice below.
+    accountTag(r.account),
     // Whether a session is still writing this run. It decides QUIET versus
     // NO UPDATE on the row, and a claimed session never reaches `unpublished`
     // below, so without this a session's death was invisible to the check and
@@ -792,6 +848,12 @@ footer{margin-top:30px;font:11px/1.5 var(--mono);color:var(--dim);
        border:1px solid var(--amber);padding:3px 5px;white-space:nowrap}
 .qchip.qout{color:var(--dim);border-color:var(--dimmer)}
 .qchip.qcur{color:var(--bone);border-color:var(--rule-hot)}
+/* The account beside the machine in a card's foot. Same weight as .mach — they
+   answer one question together — with a hairline in front so two dim mono runs
+   do not read as one string. Never a warm colour: NO ACCOUNT and +KEY are both
+   ordinary states, and this page spends amber on runs that need the operator. */
+.acct{margin-left:7px;padding-left:7px;border-left:1px solid var(--rule);
+      text-transform:uppercase;letter-spacing:.04em}
 `;
 
 function unitRows(units, now) {
@@ -852,6 +914,12 @@ function runCard(r, now, expanded) {
   // beside the Built stamp, a stale clock lies precisely.
   const goal = goalEtaText(goalEta(r, now));
   const began = clockAt(r.started, now);
+  // Which Claude subscription this run is spending. Already resolved to an
+  // enrollment id by the projection, so no lookup here and no `label: true`:
+  // this surface is unauthenticated and renders ids, never account labels.
+  // Empty for a run whose file predates the field, which is most of the archive
+  // — a blank slot rather than a NO ACCOUNT that would read as a finding.
+  const acct = r.account ? accountTag(r.account) : '';
   if (!expanded) {
     // Same rule as the desktop: at scale most runs collapse to one line, and
     // the surfaces must agree about which ones. expandSet decides for both.
@@ -862,7 +930,8 @@ function runCard(r, now, expanded) {
     <h2>${esc(r.goal)}</h2>
     <span class="st">${esc(stateText(r, now, r.session))}</span>
   </div>
-  <p class="foot"><span class="mach">${esc(r.machine)}</span> · ${c.done}/${c.total}${
+  <p class="foot"><span class="mach">${esc(r.machine)}</span>${
+    acct ? `<span class="acct">${esc(acct)}</span>` : ''} · ${c.done}/${c.total}${
     countAsOf(r, now) ? ` ${countAsOf(r, now)}` : ''}</p>
 </article>`;
   }
@@ -883,7 +952,8 @@ function runCard(r, now, expanded) {
         publicEtaText(r.session) ? ` — ${publicEtaText(r.session)}` : ''}`
       : `all ${r.session.agentsTotal} returned`}</p>` : ''}
   <div class="foot">
-    <span><span class="mach">${esc(r.machine)}</span> · ${c.done} of ${c.total} done${
+    <span><span class="mach">${esc(r.machine)}</span>${
+      acct ? `<span class="acct">${esc(acct)}</span>` : ''} · ${c.done} of ${c.total} done${
       countAsOf(r, now) ? ` ${countAsOf(r, now)}` : ''}${
       began ? ` · started ${esc(began)}` : ''}${elapsed ? ` · ${elapsed}` : ''}</span>
     <span>${esc(goal)}</span>
