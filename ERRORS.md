@@ -287,3 +287,18 @@ index only, so the worktree keeps their work untouched. Verified by extracting
 **Remember:** `git apply --cached` on a hand-built patch is the fallback when
 `add -p` cannot split; verify what you staged by checking the written tree out
 somewhere else and running it, never by reading the diff.
+
+## 2026-08-20 — splitting a commit out of two sessions' work in one function
+**What didn't work:** Three attempts. The first content filter asserted on the
+string `signedInLabel` and tripped on my own comment that happened to name it.
+The second built a clean-looking patch that still carried one of the other
+session's lines — `view.primeId` in a render signature — because that line sat
+inside a hunk that was otherwise mine. Reading the patch missed it both times.
+**What did:** `git write-tree`, extract the staged tree with `git archive`, run
+the suite there, and then grep the extracted tree for every identifier belonging
+to the other session's feature. The dangling `view.primeId` showed up in one
+grep after passing 506 tests, because an undefined field in a signature array is
+harmless at runtime and invisible to a test.
+**Remember:** A surgical commit is verified by extracting the staged tree and
+grepping it for references it does not define. Passing tests is not the check —
+a stolen line can be inert.
